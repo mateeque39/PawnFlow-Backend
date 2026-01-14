@@ -242,7 +242,10 @@ const ShiftManagement = ({ userId = 1 }) => {
       const response = await http.post('/shift/add-cash', payload);
       const responseData = response?.data || {};
 
-      setMessage(`✅ ${responseData.message || 'Cash added successfully!'} New opening balance: $${responseData.newOpeningBalance?.toFixed(2)}`);
+      setMessage(`✅ ${responseData.message || 'Cash added successfully!'} 
+        Amount Added: $${responseData.amountAdded?.toFixed(2)} | 
+        Total Cash Added This Shift: $${responseData.totalCashAdded?.toFixed(2)} | 
+        Opening Balance: $${responseData.openingBalance?.toFixed(2)}`);
       setMessageType('success');
       setCashToAdd('');
       setCashAddNotes('');
