@@ -4,7 +4,7 @@ import { parseError, getErrorMessage } from './services/errorHandler';
 import logger from './services/logger';
 
 const ShiftManagement = ({ userId = 1 }) => {
-  const [activeTab, setActiveTab] = useState('start-shift'); // 'start-shift', 'end-shift', 'history', 'today-summary', 'shift-report'
+  const [activeTab, setActiveTab] = useState('start-shift'); // 'start-shift', 'end-shift', 'history', 'today-summary', 'shift-report', 'store-balance'
   const [openingBalance, setOpeningBalance] = useState('');
   const [closingBalance, setClosingBalance] = useState('');
   const [notes, setNotes] = useState('');
@@ -14,6 +14,7 @@ const ShiftManagement = ({ userId = 1 }) => {
   const [shiftHistory, setShiftHistory] = useState([]);
   const [todaySummary, setTodaySummary] = useState(null);
   const [shiftReport, setShiftReport] = useState(null);
+  const [storeBalance, setStoreBalance] = useState(null);
   const [message, setMessage] = useState('');
   const [messageType, setMessageType] = useState(''); // 'success' or 'error'
   const [selectedShiftId, setSelectedShiftId] = useState('');
@@ -110,6 +111,24 @@ const ShiftManagement = ({ userId = 1 }) => {
       setMessageType('error');
       setShiftReport(null);
       logger.error('Error fetching shift report - ' + parsedError.message, parsedError);
+    }
+  };
+
+  const fetchStoreBalance = async () => {
+    try {
+      const response = await http.get('/store-balance');
+      const balanceData = response?.data;
+      setStoreBalance(balanceData);
+      setMessage('');
+      setMessageType('');
+      logger.debug('Store balance fetched', balanceData);
+    } catch (error) {
+      const parsedError = error.parsedError || parseError(error);
+      const userMessage = error.userMessage || getErrorMessage(parsedError);
+      setMessage(userMessage);
+      setMessageType('error');
+      setStoreBalance(null);
+      logger.error('Error fetching store balance - ' + parsedError.message, parsedError);
     }
   };
 
@@ -344,9 +363,12 @@ const ShiftManagement = ({ userId = 1 }) => {
           Shift Report
         </button>
         <button
-          onClick={() => setActiveTab('add-cash')}
+          onClick={() => {
+            setActiveTab('add-cash');
+          }}
           style={{
             padding: '10px 20px',
+            marginRight: '5px',
             backgroundColor: activeTab === 'add-cash' ? '#007bff' : '#e9ecef',
             color: activeTab === 'add-cash' ? 'white' : 'black',
             border: 'none',
@@ -355,6 +377,22 @@ const ShiftManagement = ({ userId = 1 }) => {
           }}
         >
           Add Cash
+        </button>
+        <button
+          onClick={() => {
+            setActiveTab('store-balance');
+            fetchStoreBalance();
+          }}
+          style={{
+            padding: '10px 20px',
+            backgroundColor: activeTab === 'store-balance' ? '#007bff' : '#e9ecef',
+            color: activeTab === 'store-balance' ? 'white' : 'black',
+            border: 'none',
+            cursor: 'pointer',
+            borderRadius: '4px 4px 0 0',
+          }}
+        >
+          Store Balance
         </button>
       </div>
 
@@ -821,6 +859,97 @@ const ShiftManagement = ({ userId = 1 }) => {
                 Add Cash
               </button>
             </div>
+          )}
+        </div>
+      )}
+
+      {/* STORE BALANCE TAB */}
+      {activeTab === 'store-balance' && (
+        <div style={{ border: '1px solid #ddd', padding: '15px', borderRadius: '4px' }}>
+          <h4>Current Store Balance</h4>
+
+          {storeBalance ? (
+            <div>
+              <div style={{ 
+                backgroundColor: '#f8f9fa', 
+                padding: '15px', 
+                borderRadius: '4px',
+                marginBottom: '20px'
+              }}>
+                <div style={{ marginBottom: '15px' }}>
+                  <h3 style={{ color: '#007bff', margin: '0 0 10px 0' }}>
+                    Estimated Current Balance
+                  </h3>
+                  <p style={{ 
+                    fontSize: '28px', 
+                    fontWeight: 'bold', 
+                    color: '#28a745',
+                    margin: '0'
+                  }}>
+                    ${parseFloat(storeBalance.estimatedBalance).toFixed(2)}
+                  </p>
+                </div>
+
+                <hr style={{ margin: '15px 0' }} />
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
+                  <div>
+                    <p style={{ margin: '0 0 5px 0', color: '#666' }}>
+                      <strong>Last Closing Balance:</strong>
+                    </p>
+                    <p style={{ fontSize: '18px', fontWeight: 'bold', color: '#333', margin: '0' }}>
+                      ${parseFloat(storeBalance.lastClosingBalance).toFixed(2)}
+                    </p>
+                  </div>
+
+                  <div>
+                    <p style={{ margin: '0 0 5px 0', color: '#666' }}>
+                      <strong>Total Added Today:</strong>
+                    </p>
+                    <p style={{ fontSize: '18px', fontWeight: 'bold', color: '#28a745', margin: '0' }}>
+                      +${parseFloat(storeBalance.totalAddedToday).toFixed(2)}
+                    </p>
+                  </div>
+
+                  <div>
+                    <p style={{ margin: '0 0 5px 0', color: '#666' }}>
+                      <strong>Total Paid Out:</strong>
+                    </p>
+                    <p style={{ fontSize: '18px', fontWeight: 'bold', color: '#dc3545', margin: '0' }}>
+                      -${parseFloat(storeBalance.totalPaidOut).toFixed(2)}
+                    </p>
+                  </div>
+
+                  <div>
+                    <p style={{ margin: '0 0 5px 0', color: '#666' }}>
+                      <strong>As of:</strong>
+                    </p>
+                    <p style={{ fontSize: '14px', margin: '0' }}>
+                      {new Date(storeBalance.date).toLocaleDateString()}
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              <button
+                onClick={fetchStoreBalance}
+                style={{
+                  padding: '10px 20px',
+                  backgroundColor: '#17a2b8',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '4px',
+                  cursor: 'pointer',
+                  fontSize: '14px',
+                }}
+              >
+                Refresh Balance
+              </button>
+            </div>
+          ) : (
+            <p style={{ color: '#666' }}>
+              {message ? message : 'Loading store balance...'}
+            </p>
           )}
         </div>
       )}
