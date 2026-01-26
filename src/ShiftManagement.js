@@ -243,9 +243,9 @@ const ShiftManagement = ({ userId = 1 }) => {
       const responseData = response?.data || {};
 
       setMessage(`✅ ${responseData.message || 'Cash added successfully!'} 
-        Amount Added: $${responseData.amountAdded?.toFixed(2)} | 
-        Total Cash Added This Shift: $${responseData.totalCashAdded?.toFixed(2)} | 
-        Opening Balance: $${responseData.openingBalance?.toFixed(2)}`);
+        Amount Added: $${parseFloat(responseData.amountAdded || 0).toFixed(2)} | 
+        Total Cash Added This Shift: $${parseFloat(responseData.totalCashAdded || 0).toFixed(2)} | 
+        Opening Balance: $${parseFloat(responseData.openingBalance || 0).toFixed(2)}`);
       setMessageType('success');
       setCashToAdd('');
       setCashAddNotes('');
