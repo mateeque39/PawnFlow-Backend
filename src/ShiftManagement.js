@@ -10,6 +10,8 @@ const ShiftManagement = ({ userId = 1 }) => {
   const [notes, setNotes] = useState('');
   const [cashToAdd, setCashToAdd] = useState('');
   const [cashAddNotes, setCashAddNotes] = useState('');
+  const [cashToRemove, setCashToRemove] = useState('');
+  const [cashRemoveNotes, setCashRemoveNotes] = useState('');
   const [currentShift, setCurrentShift] = useState(null);
   const [shiftHistory, setShiftHistory] = useState([]);
   const [todaySummary, setTodaySummary] = useState(null);
@@ -280,6 +282,52 @@ const ShiftManagement = ({ userId = 1 }) => {
       setMessage(userMessage);
       setMessageType('error');
       logger.error('Error adding cash - Status: ' + parsedError.status + ', Message: ' + parsedError.message, parsedError);
+    }
+  };
+
+  const handleRemoveCash = async () => {
+    if (!currentShift) {
+      setMessage('❌ No active shift found');
+      setMessageType('error');
+      return;
+    }
+
+    if (!cashToRemove || parseFloat(cashToRemove) <= 0) {
+      setMessage('❌ Please enter a valid amount to remove');
+      setMessageType('error');
+      return;
+    }
+
+    try {
+      const payload = {
+        userId,
+        amount: parseFloat(cashToRemove),
+        notes: cashRemoveNotes || 'Correction'
+      };
+      logger.debug('Removing cash from shift with payload:', payload);
+      
+      const response = await http.post('/shift/remove-cash', payload);
+      const responseData = response?.data || {};
+
+      setMessage(`✅ ${responseData.message || 'Cash removed successfully!'} 
+        Amount Removed: $${parseFloat(responseData.amountRemoved || 0).toFixed(2)} | 
+        Remaining Cash Added: $${parseFloat(responseData.totalCashAdded || 0).toFixed(2)} | 
+        Opening Balance: $${parseFloat(responseData.openingBalance || 0).toFixed(2)}`);
+      setMessageType('success');
+      setCashToRemove('');
+      setCashRemoveNotes('');
+      
+      // Refresh shift data
+      fetchCurrentShift();
+      fetchTodaySummary();
+      
+      logger.info('Cash removed from shift', { userId, amount: cashToRemove });
+    } catch (error) {
+      const parsedError = error.parsedError || parseError(error);
+      const userMessage = error.userMessage || getErrorMessage(parsedError);
+      setMessage(userMessage);
+      setMessageType('error');
+      logger.error('Error removing cash - Status: ' + parsedError.status + ', Message: ' + parsedError.message, parsedError);
     }
   };
 
@@ -858,6 +906,67 @@ const ShiftManagement = ({ userId = 1 }) => {
               >
                 Add Cash
               </button>
+
+              {/* REMOVE CASH SECTION */}
+              <div style={{ marginTop: '30px', paddingTop: '20px', borderTop: '2px solid #ddd' }}>
+                <h5 style={{ marginBottom: '15px', color: '#dc3545' }}>Remove/Adjust Cash Added</h5>
+                <p style={{ fontSize: '12px', color: '#666', marginBottom: '10px' }}>
+                  Current Total Cash Added: <strong>${parseFloat(currentShift.cash_added || 0).toFixed(2)}</strong>
+                </p>
+
+                <div style={{ marginBottom: '15px' }}>
+                  <label style={{ display: 'block', marginBottom: '5px' }}>
+                    <strong>Cash Amount to Remove ($):</strong>
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    placeholder="Enter amount to remove"
+                    value={cashToRemove}
+                    onChange={(e) => setCashToRemove(e.target.value)}
+                    style={{
+                      padding: '8px',
+                      width: '100%',
+                      maxWidth: '300px',
+                      boxSizing: 'border-box',
+                    }}
+                  />
+                </div>
+
+                <div style={{ marginBottom: '15px' }}>
+                  <label style={{ display: 'block', marginBottom: '5px' }}>
+                    <strong>Notes (Optional):</strong>
+                  </label>
+                  <textarea
+                    placeholder="e.g., Correction, adjustment, etc."
+                    value={cashRemoveNotes}
+                    onChange={(e) => setCashRemoveNotes(e.target.value)}
+                    style={{
+                      padding: '8px',
+                      width: '100%',
+                      maxWidth: '300px',
+                      boxSizing: 'border-box',
+                      minHeight: '80px',
+                    }}
+                  />
+                </div>
+
+                <button
+                  onClick={handleRemoveCash}
+                  style={{
+                    padding: '10px 20px',
+                    backgroundColor: '#dc3545',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '4px',
+                    cursor: 'pointer',
+                    fontSize: '14px',
+                  }}
+                >
+                  Remove Cash
+                </button>
+              </div>
             </div>
           )}
         </div>
