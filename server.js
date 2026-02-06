@@ -1395,13 +1395,34 @@ app.post('/make-payment', authenticateToken, requireActiveShift, async (req, res
       return res.status(404).json({ message: 'Loan not found' });
     }
 
+    // Get total payments made so far (including this one)
+    const paymentHistoryResult = await pool.query(
+      'SELECT SUM(payment_amount) as total_paid FROM payment_history WHERE loan_id = $1',
+      [loanId]
+    );
+    const previouslyPaid = parseFloat(paymentHistoryResult.rows[0].total_paid || 0);
+    const totalPaymentsAfter = previouslyPaid + parseFloat(paymentAmount);
+
     // Update remaining balance after payment
     const newRemainingBalance = parseFloat(loan.remaining_balance) - parseFloat(paymentAmount);
 
-    // Update the loan details with the new remaining balance
+    // Check if we should extend the due date
+    let newDueDate = loan.due_date;
+    const interestAmount = parseFloat(loan.interest_amount || 0);
+    const currentDate = new Date();
+    const dueDate = new Date(loan.due_date);
+    
+    // If interest is paid and due date has passed, extend it by 30 days
+    if (totalPaymentsAfter >= interestAmount && currentDate >= dueDate) {
+      newDueDate = new Date(dueDate);
+      newDueDate.setDate(newDueDate.getDate() + 30);
+      console.log('📅 Due date extended automatically. Old:', dueDate, 'New:', newDueDate);
+    }
+
+    // Update the loan details with the new remaining balance and due date if needed
     const updatedLoanResult = await pool.query(
-      'UPDATE loans SET remaining_balance = $1 WHERE id = $2 RETURNING *',
-      [Math.max(newRemainingBalance, 0), loanId]  // Ensure it doesn't go negative
+      'UPDATE loans SET remaining_balance = $1, due_date = $2 WHERE id = $3 RETURNING *',
+      [Math.max(newRemainingBalance, 0), newDueDate, loanId]  // Ensure it doesn't go negative
     );
 
     // Insert payment history
@@ -1419,7 +1440,7 @@ app.post('/make-payment', authenticateToken, requireActiveShift, async (req, res
       [newTotalPayableAmount, loanId]
     );
 
-    // Generate receipt PDF with updated loan information
+    // Generate receipt PDF with updated loan information (including new due date)
     let receiptPDF = null;
     try {
       const updatedLoan = updatedLoanResult.rows[0];
@@ -1437,7 +1458,8 @@ app.post('/make-payment', authenticateToken, requireActiveShift, async (req, res
         message: 'Loan fully paid off! Ready for redemption.',
         loan: updatedLoanResult.rows[0],
         paymentHistory: paymentResult.rows[0],
-        receiptPDF: receiptPDF // Include receipt PDF in response
+        receiptPDF: receiptPDF, // Include receipt PDF in response
+        dueDateExtended: totalPaymentsAfter >= interestAmount && currentDate >= dueDate
       });
     } else {
       // If not fully paid, return the updated loan and payment details
@@ -1445,7 +1467,8 @@ app.post('/make-payment', authenticateToken, requireActiveShift, async (req, res
         message: 'Payment successfully processed!',
         loan: updatedLoanResult.rows[0],
         paymentHistory: paymentResult.rows[0],
-        receiptPDF: receiptPDF // Include receipt PDF in response
+        receiptPDF: receiptPDF, // Include receipt PDF in response
+        dueDateExtended: totalPaymentsAfter >= interestAmount && currentDate >= dueDate
       });
     }
   } catch (err) {
@@ -3090,6 +3113,14 @@ app.post('/customers/:customerId/loans/:loanId/payment', authenticateToken, requ
       return res.status(404).json({ message: 'Loan not found for this customer' });
     }
 
+    // Get total payments made so far (including this one)
+    const paymentHistoryResult = await pool.query(
+      'SELECT SUM(payment_amount) as total_paid FROM payment_history WHERE loan_id = $1',
+      [loanIdNum]
+    );
+    const previouslyPaid = parseFloat(paymentHistoryResult.rows[0].total_paid || 0);
+    const totalPaymentsAfter = previouslyPaid + parseFloat(paymentAmount);
+
     // Update remaining balance after payment
     const newRemainingBalance = parseFloat(loan.remaining_balance) - parseFloat(paymentAmount);
     const finalBalance = Math.max(newRemainingBalance, 0);
@@ -3097,10 +3128,23 @@ app.post('/customers/:customerId/loans/:loanId/payment', authenticateToken, requ
     // If balance reaches 0, automatically redeem the loan
     const newStatus = finalBalance === 0 ? 'redeemed' : loan.status;
 
-    // Update the loan details with the new remaining balance and status if needed
+    // Check if we should extend the due date
+    let newDueDate = loan.due_date;
+    const interestAmount = parseFloat(loan.interest_amount || 0);
+    const currentDate = new Date();
+    const dueDate = new Date(loan.due_date);
+    
+    // If interest is paid and due date has passed, extend it by 30 days
+    if (totalPaymentsAfter >= interestAmount && currentDate >= dueDate) {
+      newDueDate = new Date(dueDate);
+      newDueDate.setDate(newDueDate.getDate() + 30);
+      console.log('📅 Due date extended automatically. Old:', dueDate, 'New:', newDueDate);
+    }
+
+    // Update the loan details with the new remaining balance, status, and due date if needed
     const updatedLoanResult = await pool.query(
-      'UPDATE loans SET remaining_balance = $1, status = $2 WHERE id = $3 RETURNING *',
-      [finalBalance, newStatus, loanIdNum]
+      'UPDATE loans SET remaining_balance = $1, status = $2, due_date = $3 WHERE id = $4 RETURNING *',
+      [finalBalance, newStatus, newDueDate, loanIdNum]
     );
 
     // Insert payment history with default payment method if not provided
@@ -3110,7 +3154,7 @@ app.post('/customers/:customerId/loans/:loanId/payment', authenticateToken, requ
       [loanIdNum, method, paymentAmount, userId || null]
     );
 
-    // Generate receipt PDF with updated loan information
+    // Generate receipt PDF with updated loan information (including new due date)
     let receiptPDF = null;
     try {
       const updatedLoan = updatedLoanResult.rows[0];
@@ -3132,7 +3176,8 @@ app.post('/customers/:customerId/loans/:loanId/payment', authenticateToken, requ
         message: '🎉 Loan fully paid and automatically redeemed!',
         loan: validators.formatLoanResponse(loanWithInterest),
         paymentHistory: paymentResult.rows[0],
-        receiptPDF: receiptPDF // Include receipt PDF in response
+        receiptPDF: receiptPDF, // Include receipt PDF in response
+        dueDateExtended: totalPaymentsAfter >= interestAmount && currentDate >= dueDate
       });
     } else {
       const loanWithInterest = {
@@ -3143,7 +3188,8 @@ app.post('/customers/:customerId/loans/:loanId/payment', authenticateToken, requ
         message: 'Payment successfully processed!',
         loan: validators.formatLoanResponse(loanWithInterest),
         paymentHistory: paymentResult.rows[0],
-        receiptPDF: receiptPDF // Include receipt PDF in response
+        receiptPDF: receiptPDF, // Include receipt PDF in response
+        dueDateExtended: totalPaymentsAfter >= interestAmount && currentDate >= dueDate
       });
     }
   } catch (err) {
