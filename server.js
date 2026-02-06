@@ -1409,11 +1409,10 @@ app.post('/make-payment', authenticateToken, requireActiveShift, async (req, res
     // Check if we should extend the due date
     let newDueDate = loan.due_date;
     const interestAmount = parseFloat(loan.interest_amount || 0);
-    const currentDate = new Date();
-    const dueDate = new Date(loan.due_date);
     
-    // If interest is paid and due date has passed, extend it by 30 days
-    if (totalPaymentsAfter >= interestAmount && currentDate >= dueDate) {
+    // If interest is paid, extend it by 30 days (regardless of due date status)
+    if (totalPaymentsAfter >= interestAmount) {
+      const dueDate = new Date(loan.due_date);
       newDueDate = new Date(dueDate);
       newDueDate.setDate(newDueDate.getDate() + 30);
       console.log('📅 Due date extended automatically. Old:', dueDate, 'New:', newDueDate);
@@ -1459,7 +1458,7 @@ app.post('/make-payment', authenticateToken, requireActiveShift, async (req, res
         loan: updatedLoanResult.rows[0],
         paymentHistory: paymentResult.rows[0],
         receiptPDF: receiptPDF, // Include receipt PDF in response
-        dueDateExtended: totalPaymentsAfter >= interestAmount && currentDate >= dueDate
+        dueDateExtended: totalPaymentsAfter >= interestAmount
       });
     } else {
       // If not fully paid, return the updated loan and payment details
@@ -1468,7 +1467,7 @@ app.post('/make-payment', authenticateToken, requireActiveShift, async (req, res
         loan: updatedLoanResult.rows[0],
         paymentHistory: paymentResult.rows[0],
         receiptPDF: receiptPDF, // Include receipt PDF in response
-        dueDateExtended: totalPaymentsAfter >= interestAmount && currentDate >= dueDate
+        dueDateExtended: totalPaymentsAfter >= interestAmount
       });
     }
   } catch (err) {
@@ -3131,11 +3130,10 @@ app.post('/customers/:customerId/loans/:loanId/payment', authenticateToken, requ
     // Check if we should extend the due date
     let newDueDate = loan.due_date;
     const interestAmount = parseFloat(loan.interest_amount || 0);
-    const currentDate = new Date();
-    const dueDate = new Date(loan.due_date);
     
-    // If interest is paid and due date has passed, extend it by 30 days
-    if (totalPaymentsAfter >= interestAmount && currentDate >= dueDate) {
+    // If interest is paid, extend it by 30 days (regardless of due date status)
+    if (totalPaymentsAfter >= interestAmount) {
+      const dueDate = new Date(loan.due_date);
       newDueDate = new Date(dueDate);
       newDueDate.setDate(newDueDate.getDate() + 30);
       console.log('📅 Due date extended automatically. Old:', dueDate, 'New:', newDueDate);
@@ -3177,7 +3175,7 @@ app.post('/customers/:customerId/loans/:loanId/payment', authenticateToken, requ
         loan: validators.formatLoanResponse(loanWithInterest),
         paymentHistory: paymentResult.rows[0],
         receiptPDF: receiptPDF, // Include receipt PDF in response
-        dueDateExtended: totalPaymentsAfter >= interestAmount && currentDate >= dueDate
+        dueDateExtended: totalPaymentsAfter >= interestAmount
       });
     } else {
       const loanWithInterest = {
@@ -3189,7 +3187,7 @@ app.post('/customers/:customerId/loans/:loanId/payment', authenticateToken, requ
         loan: validators.formatLoanResponse(loanWithInterest),
         paymentHistory: paymentResult.rows[0],
         receiptPDF: receiptPDF, // Include receipt PDF in response
-        dueDateExtended: totalPaymentsAfter >= interestAmount && currentDate >= dueDate
+        dueDateExtended: totalPaymentsAfter >= interestAmount
       });
     }
   } catch (err) {
