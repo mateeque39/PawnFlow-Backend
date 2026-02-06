@@ -1413,8 +1413,13 @@ app.post('/make-payment', authenticateToken, requireActiveShift, async (req, res
     // If interest is paid, extend it by 30 days (regardless of due date status)
     if (totalPaymentsAfter >= interestAmount) {
       const dueDate = new Date(loan.due_date);
-      newDueDate = new Date(dueDate);
-      newDueDate.setDate(newDueDate.getDate() + 30);
+      const extended = new Date(dueDate);
+      extended.setDate(extended.getDate() + 30);
+      // Format date as YYYY-MM-DD string for PostgreSQL
+      const year = extended.getFullYear();
+      const month = String(extended.getMonth() + 1).padStart(2, '0');
+      const day = String(extended.getDate()).padStart(2, '0');
+      newDueDate = `${year}-${month}-${day}`;
       console.log('📅 Due date extended automatically. Old:', dueDate, 'New:', newDueDate);
     }
 
@@ -3134,8 +3139,13 @@ app.post('/customers/:customerId/loans/:loanId/payment', authenticateToken, requ
     // If interest is paid, extend it by 30 days (regardless of due date status)
     if (totalPaymentsAfter >= interestAmount) {
       const dueDate = new Date(loan.due_date);
-      newDueDate = new Date(dueDate);
-      newDueDate.setDate(newDueDate.getDate() + 30);
+      const extended = new Date(dueDate);
+      extended.setDate(extended.getDate() + 30);
+      // Format date as YYYY-MM-DD string for PostgreSQL
+      const year = extended.getFullYear();
+      const month = String(extended.getMonth() + 1).padStart(2, '0');
+      const day = String(extended.getDate()).padStart(2, '0');
+      newDueDate = `${year}-${month}-${day}`;
       console.log('📅 Due date extended automatically. Old:', dueDate, 'New:', newDueDate);
     }
 
