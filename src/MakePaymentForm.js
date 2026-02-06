@@ -12,6 +12,7 @@ const MakePaymentForm = ({ loggedInUser }) => {
   const [paymentHistory, setPaymentHistory] = useState([]);
   const [message, setMessage] = useState("");
   const [loanDueDateExtended, setLoanDueDateExtended] = useState(false);  // New state for tracking due date extension
+  const [receiptPDF, setReceiptPDF] = useState(null);  // New state for receipt PDF
 
   // Search loan using transaction number
   const handleSearchLoan = async () => {
@@ -47,6 +48,36 @@ const MakePaymentForm = ({ loggedInUser }) => {
     }
   };
 
+  // Download receipt PDF
+  const handleDownloadReceipt = () => {
+    if (!receiptPDF) return;
+
+    try {
+      // Convert base64 to blob
+      const byteCharacters = atob(receiptPDF);
+      const byteNumbers = new Array(byteCharacters.length);
+      for (let i = 0; i < byteCharacters.length; i++) {
+        byteNumbers[i] = byteCharacters.charCodeAt(i);
+      }
+      const byteArray = new Uint8Array(byteNumbers);
+      const blob = new Blob([byteArray], { type: 'application/pdf' });
+
+      // Create download link
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `loan_receipt_${loan.transaction_number || loan.id}.pdf`;
+      document.body.appendChild(link);
+      link.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(link);
+      logger.info('Receipt PDF downloaded', { loanId: loan.id });
+    } catch (error) {
+      console.error('Error downloading receipt:', error);
+      setMessage('Error downloading receipt PDF');
+    }
+  };
+
   // Submit payment
   const handlePaymentSubmit = async (e) => {
     e.preventDefault();
@@ -78,13 +109,18 @@ const MakePaymentForm = ({ loggedInUser }) => {
         redemptionFee: (willFullyPay && redemptionFee) ? parseFloat(redemptionFee) : undefined
       });
 
-      setMessage("Payment successful!");
+      setMessage("Payment successful! New receipt generated with updated due date.");
 
       // Update loan details with new remaining balance
       setLoan(response.loan);
 
       // Add new payment record to history
       setPaymentHistory([response.paymentHistory, ...paymentHistory]);
+
+      // Store receipt PDF if available
+      if (response.receiptPDF) {
+        setReceiptPDF(response.receiptPDF);
+      }
 
       // Check if loan is fully paid
       if (response.loan.remaining_balance === 0) {
@@ -212,6 +248,26 @@ const MakePaymentForm = ({ loggedInUser }) => {
           {loanDueDateExtended && (
             <div className="alert alert-info" style={{ marginBottom: '20px' }}>
               ✓ Your loan due date has been extended by 30 days.
+            </div>
+          )}
+
+          {/* Receipt Download Button */}
+          {receiptPDF && (
+            <div className="card" style={{ marginBottom: '20px', backgroundColor: '#d4edda', border: '2px solid #28a745' }}>
+              <div className="card-header" style={{ backgroundColor: '#28a745', color: 'white' }}>✅ New Receipt Generated</div>
+              <div style={{ padding: '15px' }}>
+                <p style={{ margin: '0 0 15px 0', color: '#155724' }}>
+                  <strong>Your new receipt with the updated due date has been generated!</strong>
+                </p>
+                <button 
+                  type="button"
+                  onClick={handleDownloadReceipt} 
+                  className="btn-primary"
+                  style={{ width: '100%', backgroundColor: '#28a745', borderColor: '#28a745' }}
+                >
+                  📄 Download Receipt PDF
+                </button>
+              </div>
             </div>
           )}
 
