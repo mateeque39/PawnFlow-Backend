@@ -112,7 +112,10 @@ const MakePaymentForm = ({ loggedInUser }) => {
       // Build success message with due date update info
       let successMsg = "Payment successful! New receipt generated with updated due date.";
       if (response.dueDateExtended) {
-        successMsg = "✅ Payment successful! Due date has been automatically extended by 30 days. New receipt ready to download.";
+        const oldDate = new Date(loan.due_date);
+        const newDate = new Date(oldDate);
+        newDate.setDate(newDate.getDate() + 30);
+        successMsg = `✅ Payment successful! Interest paid - Due date automatically extended from ${oldDate.toLocaleDateString()} to ${newDate.toLocaleDateString()}. New receipt ready.`;
       }
       setMessage(successMsg);
 
