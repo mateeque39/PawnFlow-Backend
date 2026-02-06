@@ -5669,7 +5669,49 @@ app.get('/api/loans/:loanId/receipt', authenticateToken, async (req, res) => {
       return res.status(404).json({ message: 'Loan not found' });
     }
 
-    const loan = loanResult.rows[0];
+    let loan = loanResult.rows[0];
+
+    // Check if interest has been paid and due date should be extended
+    const paymentHistoryResult = await pool.query(
+      'SELECT SUM(payment_amount) as total_paid FROM payment_history WHERE loan_id = $1',
+      [parsedLoanId]
+    );
+    const totalPaid = parseFloat(paymentHistoryResult.rows[0].total_paid || 0);
+    const interestAmount = parseFloat(loan.interest_amount || 0);
+
+    // If interest is paid but due date hasn't been extended yet, extend it now
+    if (totalPaid >= interestAmount && loan.due_date) {
+      const dueDate = new Date(loan.due_date);
+      const currentDueDate = new Date(dueDate);
+      
+      // Check if due date is still the original (hasn't been extended)
+      // We do this by checking if extending it 30 days would be different
+      const oneMonthFromNow = new Date(currentDueDate);
+      oneMonthFromNow.setDate(oneMonthFromNow.getDate() + 30);
+      
+      // Get the original loan creation date to see if this might be first extension
+      const loanCreatedDate = new Date(loan.created_at);
+      const daysSinceCreated = Math.floor((currentDueDate - loanCreatedDate) / (1000 * 60 * 60 * 24));
+      
+      // If it appears this is the original due date (hasn't been extended), extend it
+      if (daysSinceCreated < 45) { // Original loan term is typically 30 days, so less than 45 days suggests original date
+        const extended = new Date(dueDate);
+        extended.setDate(extended.getDate() + 30);
+        // Format date as YYYY-MM-DD string for PostgreSQL
+        const year = extended.getFullYear();
+        const month = String(extended.getMonth() + 1).padStart(2, '0');
+        const day = String(extended.getDate()).padStart(2, '0');
+        const newDueDate = `${year}-${month}-${day}`;
+        
+        // Update the due date in database
+        const updatedResult = await pool.query(
+          'UPDATE loans SET due_date = $1 WHERE id = $2 RETURNING *',
+          [newDueDate, parsedLoanId]
+        );
+        loan = updatedResult.rows[0];
+        console.log('📅 Due date extended on receipt download. Old:', dueDate, 'New:', newDueDate);
+      }
+    }
 
     console.log('📄 Generating receipt PDF for loan:', {
       id: loan.id,
@@ -5677,7 +5719,8 @@ app.get('/api/loans/:loanId/receipt', authenticateToken, async (req, res) => {
       customer_name_field: loan.customer_name,
       first_name: loan.first_name,
       last_name: loan.last_name,
-      loan_amount: loan.loan_amount
+      loan_amount: loan.loan_amount,
+      due_date: loan.due_date
     });
 
     // Generate PDF using existing PDF generator
