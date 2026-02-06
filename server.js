@@ -1419,12 +1419,25 @@ app.post('/make-payment', authenticateToken, requireActiveShift, async (req, res
       [newTotalPayableAmount, loanId]
     );
 
+    // Generate receipt PDF with updated loan information
+    let receiptPDF = null;
+    try {
+      const updatedLoan = updatedLoanResult.rows[0];
+      const pdfBuffer = await generateLoanPDF(updatedLoan);
+      receiptPDF = pdfBuffer.toString('base64'); // Convert to base64 for JSON transport
+      console.log('✅ Receipt PDF generated successfully after payment for loan:', loanId);
+    } catch (pdfError) {
+      console.warn('⚠️ Warning: Could not generate receipt PDF after payment:', pdfError.message);
+      // Don't fail the payment if PDF generation fails
+    }
+
     // Check if the loan is fully paid
     if (newRemainingBalance === 0) {
       res.status(200).json({
         message: 'Loan fully paid off! Ready for redemption.',
         loan: updatedLoanResult.rows[0],
         paymentHistory: paymentResult.rows[0],
+        receiptPDF: receiptPDF // Include receipt PDF in response
       });
     } else {
       // If not fully paid, return the updated loan and payment details
@@ -1432,6 +1445,7 @@ app.post('/make-payment', authenticateToken, requireActiveShift, async (req, res
         message: 'Payment successfully processed!',
         loan: updatedLoanResult.rows[0],
         paymentHistory: paymentResult.rows[0],
+        receiptPDF: receiptPDF // Include receipt PDF in response
       });
     }
   } catch (err) {
@@ -3096,6 +3110,18 @@ app.post('/customers/:customerId/loans/:loanId/payment', authenticateToken, requ
       [loanIdNum, method, paymentAmount, userId || null]
     );
 
+    // Generate receipt PDF with updated loan information
+    let receiptPDF = null;
+    try {
+      const updatedLoan = updatedLoanResult.rows[0];
+      const pdfBuffer = await generateLoanPDF(updatedLoan);
+      receiptPDF = pdfBuffer.toString('base64'); // Convert to base64 for JSON transport
+      console.log('✅ Receipt PDF generated successfully after payment for loan:', loanIdNum);
+    } catch (pdfError) {
+      console.warn('⚠️ Warning: Could not generate receipt PDF after payment:', pdfError.message);
+      // Don't fail the payment if PDF generation fails
+    }
+
     // Check if the loan was just fully paid (and auto-redeemed)
     if (finalBalance <= 0) {
       const loanWithInterest = {
@@ -3106,6 +3132,7 @@ app.post('/customers/:customerId/loans/:loanId/payment', authenticateToken, requ
         message: '🎉 Loan fully paid and automatically redeemed!',
         loan: validators.formatLoanResponse(loanWithInterest),
         paymentHistory: paymentResult.rows[0],
+        receiptPDF: receiptPDF // Include receipt PDF in response
       });
     } else {
       const loanWithInterest = {
@@ -3116,6 +3143,7 @@ app.post('/customers/:customerId/loans/:loanId/payment', authenticateToken, requ
         message: 'Payment successfully processed!',
         loan: validators.formatLoanResponse(loanWithInterest),
         paymentHistory: paymentResult.rows[0],
+        receiptPDF: receiptPDF // Include receipt PDF in response
       });
     }
   } catch (err) {
