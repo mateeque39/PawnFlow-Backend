@@ -109,7 +109,12 @@ const MakePaymentForm = ({ loggedInUser }) => {
         redemptionFee: (willFullyPay && redemptionFee) ? parseFloat(redemptionFee) : undefined
       });
 
-      setMessage("Payment successful! New receipt generated with updated due date.");
+      // Build success message with due date update info
+      let successMsg = "Payment successful! New receipt generated with updated due date.";
+      if (response.dueDateExtended) {
+        successMsg = "✅ Payment successful! Due date has been automatically extended by 30 days. New receipt ready to download.";
+      }
+      setMessage(successMsg);
 
       // Update loan details with new remaining balance
       setLoan(response.loan);
@@ -125,23 +130,6 @@ const MakePaymentForm = ({ loggedInUser }) => {
       // Check if loan is fully paid
       if (response.loan.remaining_balance === 0) {
         setMessage("🎉 Loan is now fully paid and automatically redeemed!");
-      }
-
-      // Check if payment covers interest and attempt to extend due date
-      const totalPaymentsMade = paymentHistory.reduce((sum, p) => sum + parseFloat(p.payment_amount || 0), 0) + parseFloat(paymentAmount);
-      if (totalPaymentsMade >= loan.interest_amount && new Date() > new Date(loan.due_date)) {
-        try {
-          const extendResponse = await http.post("/extend-loan", {
-            loanId: loan.id,
-          });
-          setMessage("Payment successful! Loan due date extended by 30 days!");
-          setLoan(extendResponse.loan);
-          setLoanDueDateExtended(true);
-          logger.info('Payment successful and loan extended', { loanId: loan.id });
-        } catch (extendError) {
-          setMessage("Payment successful!");
-          logger.info('Payment successful', { loanId: loan.id });
-        }
       }
 
       setPaymentAmount("");
