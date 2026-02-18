@@ -168,7 +168,7 @@ const ViewCustomerLoansForm = ({ loggedInUser }) => {
       
       setMessage('');
       setMessageType('');
-      const totalLoans = (categorized.active?.length || 0) + (categorized.redeemed?.length || 0) + (categorized.forfeited?.length || 0);
+      const totalLoans = (categorized.active?.length || 0) + (categorized.redeemed?.length || 0) + (categorized.forfeited?.length || 0) + (categorized.overdue?.length || 0);
       logger.info('Customer loans loaded', { customerId: profile.id, totalLoans });
     } catch (error) {
       const parsedError = error.parsedError || parseError(error);
@@ -522,7 +522,7 @@ const ViewCustomerLoansForm = ({ loggedInUser }) => {
           <button
             onClick={() => {
               setSelectedProfile(null);
-              setProfileLoans({ active: [], redeemed: [], forfeited: [], extended: [] });
+              setProfileLoans({ active: [], redeemed: [], forfeited: [], overdue: [], extended: [] });
             }}
             className="btn-primary"
           >
