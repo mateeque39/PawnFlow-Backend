@@ -2416,6 +2416,12 @@ app.get('/customers/:customerId/loans', async (req, res) => {
       [customerIdNum]
     );
 
+    // Get overdue loans
+    const overdueLoansResult = await pool.query(
+      `SELECT id, transaction_number, loan_amount, interest_rate, interest_amount, total_payable_amount, recurring_fee, redemption_fee, remaining_balance, due_date, loan_issued_date, status, item_description, item_category, street_address, city, state, zipcode, collateral_description, collateral_image FROM loans WHERE customer_id = $1 AND status = 'overdue' ORDER BY loan_issued_date DESC`,
+      [customerIdNum]
+    );
+
     // Get payment history
     const paymentHistoryResult = await pool.query(
       `SELECT ph.*, l.transaction_number, l.loan_amount
@@ -2464,11 +2470,13 @@ app.get('/customers/:customerId/loans', async (req, res) => {
       activeLoans: formatLoans(activeLoansResult.rows),
       redeemedLoans: formatLoans(redeemedLoansResult.rows),
       forfeitedLoans: formatLoans(forfeitedLoansResult.rows),
+      overdueLoans: formatLoans(overdueLoansResult.rows),
       paymentHistory: paymentHistoryResult.rows,
       summary: {
         totalActiveLoans: activeLoansResult.rows.length,
         totalRedeemedLoans: redeemedLoansResult.rows.length,
         totalForfeitedLoans: forfeitedLoansResult.rows.length,
+        totalOverdueLoans: overdueLoansResult.rows.length,
         totalPayments: paymentHistoryResult.rows.length,
         totalOutstanding: activeLoansResult.rows.reduce((sum, loan) => sum + parseFloat(loan.remaining_balance || 0), 0)
       }
