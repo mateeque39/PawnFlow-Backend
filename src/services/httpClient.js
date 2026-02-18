@@ -15,6 +15,9 @@ const axiosInstance = axios.create({
   headers: apiConfig.getDefaultHeaders(),
 });
 
+// Log the baseURL for debugging
+console.log(`[HTTP_CLIENT] Axios baseURL configured as: ${axiosInstance.defaults.baseURL}`);
+
 /**
  * Request interceptor
  * - Log outgoing requests

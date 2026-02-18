@@ -139,6 +139,14 @@ const ViewCustomerLoansForm = ({ loggedInUser }) => {
 
       setProfileLoans(categorized);
       
+      logger.info('Loans categorized successfully', {
+        active: categorized.active.length,
+        redeemed: categorized.redeemed.length,
+        forfeited: categorized.forfeited.length,
+        overdue: categorized.overdue.length,
+        extended: categorized.extended.length
+      });
+      
       // Extract address information from the first available loan
       const allLoans = [
         ...(categorized.active || []),
