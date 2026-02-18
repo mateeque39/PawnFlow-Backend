@@ -13,6 +13,7 @@ const ViewCustomerLoansForm = ({ loggedInUser }) => {
     active: [],
     redeemed: [],
     forfeited: [],
+    overdue: [],
     extended: []
   });
   const [activeTab, setActiveTab] = useState('active');
@@ -120,6 +121,7 @@ const ViewCustomerLoansForm = ({ loggedInUser }) => {
             active: (response.data.activeLoans || []).map(normalizeLoan),
             redeemed: (response.data.redeemedLoans || []).map(normalizeLoan),
             forfeited: (response.data.forfeitedLoans || []).map(normalizeLoan),
+            overdue: (response.data.overdueLoans || []).map(normalizeLoan),
             extended: [] // Backend doesn't have separate 'extended' status
           };
         } else {
@@ -129,6 +131,7 @@ const ViewCustomerLoansForm = ({ loggedInUser }) => {
             active: loans.filter(l => l.status === 'active' || l.status === 'ACTIVE').map(normalizeLoan),
             redeemed: loans.filter(l => l.status === 'redeemed' || l.status === 'REDEEMED').map(normalizeLoan),
             forfeited: loans.filter(l => l.status === 'forfeited' || l.status === 'FORFEITED').map(normalizeLoan),
+            overdue: loans.filter(l => l.status === 'overdue' || l.status === 'OVERDUE').map(normalizeLoan),
             extended: loans.filter(l => l.status === 'extended' || l.status === 'EXTENDED').map(normalizeLoan)
           };
         }
@@ -141,6 +144,7 @@ const ViewCustomerLoansForm = ({ loggedInUser }) => {
         ...(categorized.active || []),
         ...(categorized.redeemed || []),
         ...(categorized.forfeited || []),
+        ...(categorized.overdue || []),
         ...(categorized.extended || [])
       ];
       
@@ -296,6 +300,7 @@ const ViewCustomerLoansForm = ({ loggedInUser }) => {
     active: profileLoans.active.length,
     redeemed: profileLoans.redeemed.length,
     forfeited: profileLoans.forfeited.length,
+    overdue: profileLoans.overdue.length,
     extended: profileLoans.extended.length
   };
 
@@ -307,6 +312,8 @@ const ViewCustomerLoansForm = ({ loggedInUser }) => {
         return profileLoans.redeemed;
       case 'forfeited':
         return profileLoans.forfeited;
+      case 'overdue':
+        return profileLoans.overdue;
       case 'extended':
         return profileLoans.extended;
       default:
@@ -322,6 +329,8 @@ const ViewCustomerLoansForm = ({ loggedInUser }) => {
         return '#6c757d';
       case 'forfeited':
         return '#dc3545';
+      case 'overdue':
+        return '#ff6b6b';
       case 'extended':
         return '#ffc107';
       default:
@@ -524,7 +533,7 @@ const ViewCustomerLoansForm = ({ loggedInUser }) => {
 
       {/* Tabs */}
       <div className="tabs" style={{ marginBottom: '20px' }}>
-        {['active', 'redeemed', 'forfeited', 'extended'].map(tab => (
+        {['active', 'overdue', 'redeemed', 'forfeited', 'extended'].map(tab => (
           <button
             key={tab}
             className={`tab-button ${activeTab === tab ? 'active' : ''}`}
