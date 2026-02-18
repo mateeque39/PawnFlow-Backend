@@ -14,8 +14,8 @@ if (!fs.existsSync(buildPath)) {
 
 // Serve static files from the build directory with caching
 app.use(express.static(buildPath, {
-  maxAge: '1d',
-  etag: false
+  maxAge: 0,  // Don't cache - always check for updates
+  etag: true  // Use etag to detect changes
 }));
 
 // Middleware to log requests
