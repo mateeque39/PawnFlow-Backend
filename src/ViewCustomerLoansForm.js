@@ -71,9 +71,19 @@ const ViewCustomerLoansForm = ({ loggedInUser }) => {
     setSelectedProfile(normalizedProfile);
     setLoading(true);
     try {
+      logger.info(`Fetching loans for customer ${profile.id}...`);
+      
       // Fetch all loans for this customer
       const response = await http.get(`/customers/${profile.id}/loans`, {
         params: { _ts: Date.now() }
+      });
+
+      logger.info('API response received', { 
+        activeLoans: response.data?.activeLoans?.length, 
+        redeemedLoans: response.data?.redeemedLoans?.length,
+        forfeitedLoans: response.data?.forfeitedLoans?.length,
+        overdueLoans: response.data?.overdueLoans?.length,
+        hasData: !!response?.data
       });
 
       // Backend already returns categorized loans
