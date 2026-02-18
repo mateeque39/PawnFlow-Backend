@@ -1,4 +1,5 @@
-// FORCE REBUILD: v3.1
+// FORCE REBUILD: v3.2 - Cache Bust
+// Build timestamp: 2026-02-18T18:05:00Z
 import React from 'react';
 import ReactDOM from 'react-dom/client'; // Ensure you're importing from 'react-dom/client'
 import './index.css';

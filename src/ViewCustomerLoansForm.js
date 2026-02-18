@@ -366,6 +366,9 @@ const ViewCustomerLoansForm = ({ loggedInUser }) => {
 
   return (
     <div className="form-container">
+      <div style={{ backgroundColor: '#ff0000', color: 'white', padding: '10px', marginBottom: '10px', fontWeight: 'bold', textAlign: 'center' }}>
+        🔴 BUILD V4 - FIXED CACHING - If you see this, NEW CODE IS RUNNING
+      </div>
       <h3>Customer Profile & Loan History</h3>
 
       {/* Message Area */}
