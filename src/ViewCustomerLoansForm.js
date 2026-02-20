@@ -78,6 +78,8 @@ const ViewCustomerLoansForm = ({ loggedInUser }) => {
         params: { _ts: Date.now() }
       });
 
+      console.log('DEBUG: Full API Response:', JSON.stringify(response.data, null, 2));
+      
       logger.info('API response received', { 
         activeLoans: response.data?.activeLoans?.length, 
         redeemedLoans: response.data?.redeemedLoans?.length,
@@ -148,6 +150,14 @@ const ViewCustomerLoansForm = ({ loggedInUser }) => {
       }
 
       setProfileLoans(categorized);
+      
+      console.log('DEBUG: Categorized loans:', {
+        active: categorized.active?.length || 0,
+        redeemed: categorized.redeemed?.length || 0,
+        forfeited: categorized.forfeited?.length || 0,
+        overdue: categorized.overdue?.length || 0,
+        extended: categorized.extended?.length || 0
+      });
       
       logger.info('Loans categorized successfully', {
         active: categorized.active.length,
