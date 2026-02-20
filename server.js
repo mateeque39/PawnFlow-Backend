@@ -29,7 +29,7 @@ const cron = require('node-cron');
 cron.schedule('0 0 * * *', async () => {  
   try {
     const result = await pool.query(
-      'SELECT * FROM loans WHERE due_date <= CURRENT_DATE AND status = $1',
+      'SELECT * FROM loans WHERE due_date < CURRENT_DATE AND status = $1',
       ['active']
     );
 
@@ -221,7 +221,7 @@ app.post('/add-money', async (req, res) => {
 app.post('/check-due-date', async (req, res) => {
   try {
     const result = await pool.query(
-      'SELECT * FROM loans WHERE due_date <= CURRENT_DATE AND status = $1',
+      'SELECT * FROM loans WHERE due_date < CURRENT_DATE AND status = $1',
       ['active']
     );
 
