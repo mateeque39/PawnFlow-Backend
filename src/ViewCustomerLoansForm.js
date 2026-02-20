@@ -50,6 +50,7 @@ const ViewCustomerLoansForm = ({ loggedInUser }) => {
   };
 
   const handleProfileSelect = async (profile) => {
+    console.log('🔴 FRESH CODE v2 - handleProfileSelect called for customer:', profile.id);
     // Normalize profile data to handle different field naming conventions from backend
     const normalizedProfile = {
       id: getFieldValue(profile, 'id', 'customerId', 'customer_id') || profile.id,
