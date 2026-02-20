@@ -194,7 +194,7 @@ const cron = require('node-cron');
 cron.schedule('0 0 * * *', async () => {  
   try {
     const result = await pool.query(
-      'SELECT * FROM loans WHERE due_date <= CURRENT_DATE AND status = $1',
+      'SELECT * FROM loans WHERE due_date < CURRENT_DATE AND status = $1',
       ['active']
     );
 
@@ -944,7 +944,7 @@ app.post('/add-money', async (req, res) => {
 app.post('/check-due-date', async (req, res) => {
   try {
     const result = await pool.query(
-      'SELECT * FROM loans WHERE due_date <= CURRENT_DATE AND status = $1',
+      'SELECT * FROM loans WHERE due_date < CURRENT_DATE AND status = $1',
       ['active']
     );
 
@@ -2416,9 +2416,9 @@ app.get('/customers/:customerId/loans', async (req, res) => {
       [customerIdNum]
     );
 
-    // Get overdue loans
+    // Get overdue loans (include both explicitly marked overdue AND active loans past due date)
     const overdueLoansResult = await pool.query(
-      `SELECT id, transaction_number, loan_amount, interest_rate, interest_amount, total_payable_amount, recurring_fee, redemption_fee, remaining_balance, due_date, loan_issued_date, status, item_description, item_category, street_address, city, state, zipcode, collateral_description, collateral_image FROM loans WHERE customer_id = $1 AND status = 'overdue' ORDER BY loan_issued_date DESC`,
+      `SELECT id, transaction_number, loan_amount, interest_rate, interest_amount, total_payable_amount, recurring_fee, redemption_fee, remaining_balance, due_date, loan_issued_date, status, item_description, item_category, street_address, city, state, zipcode, collateral_description, collateral_image FROM loans WHERE customer_id = $1 AND (status = 'overdue' OR (status = 'active' AND due_date < CURRENT_DATE)) ORDER BY loan_issued_date DESC`,
       [customerIdNum]
     );
 
