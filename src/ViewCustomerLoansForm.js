@@ -128,7 +128,8 @@ const ViewCustomerLoansForm = ({ loggedInUser }) => {
 
       if (response?.data) {
         // If backend returns grouped format (activeLoans, redeemedLoans, etc.)
-        if (response.data.activeLoans || response.data.redeemedLoans) {
+        // Check if properties exist (don't use || because empty arrays are falsy!)
+        if ('activeLoans' in response.data && 'overdueLoans' in response.data) {
           categorized = {
             active: (response.data.activeLoans || []).map(normalizeLoan),
             redeemed: (response.data.redeemedLoans || []).map(normalizeLoan),
