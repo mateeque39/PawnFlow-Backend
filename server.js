@@ -3005,18 +3005,48 @@ app.get('/customers/:customerId/loans', async (req, res) => {
       [customerIdNum]
     );
 
-    // Group loans by status
-    const loans = result.rows.map(loan => ({
-      ...validators.formatLoanResponse(loan),
-      pdf_url: `/loan-pdf/${loan.id}`
-    }));
+    // Helper function to compute overdue info
+    const computeOverdueInfo = (loan) => {
+      const isClosedStatus = ['PAID', 'CLOSED', 'paid', 'closed'].includes(loan.status);
+      const hasDueDate = loan.due_date && !isNaN(new Date(loan.due_date).getTime());
+      
+      let isOverdue = false;
+      let daysOverdue = 0;
+      
+      if (hasDueDate && !isClosedStatus) {
+        const dueDateMs = new Date(loan.due_date).getTime();
+        const nowMs = Date.now();
+        
+        isOverdue = dueDateMs < nowMs;
+        
+        if (isOverdue) {
+          daysOverdue = Math.floor((nowMs - dueDateMs) / (1000 * 60 * 60 * 24));
+        }
+      }
+      
+      return { isOverdue, daysOverdue };
+    };
 
-    const activeLoans = loans.filter(l => l.status === 'active');
+    // Group loans by status AND by overdue status for active loans
+    const loans = result.rows.map(loan => {
+      const overdueInfo = computeOverdueInfo(loan);
+      return {
+        ...validators.formatLoanResponse(loan),
+        pdf_url: `/loan-pdf/${loan.id}`,
+        isOverdue: overdueInfo.isOverdue,
+        daysOverdue: overdueInfo.daysOverdue
+      };
+    });
+
+    // Categorize loans
+    const activeLoans = loans.filter(l => l.status === 'active' && !l.isOverdue);
+    const overdueLoans = loans.filter(l => l.isOverdue); // Any status can be overdue, but we exclude PAID/CLOSED in computation
     const redeemedLoans = loans.filter(l => l.status === 'redeemed');
     const forfeitedLoans = loans.filter(l => l.status === 'forfeited');
 
     res.json({
       activeLoans,
+      overdueLoans,
       redeemedLoans,
       forfeitedLoans,
       loans // Also include flat array for backwards compatibility
