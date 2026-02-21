@@ -212,11 +212,11 @@ const ManageCustomerProfileForm = ({ loggedInUser }) => {
         params: { _ts: Date.now() }
       });
 
-      // Backend returns grouped loans object: { activeLoans, redeemedLoans, forfeitedLoans }
+      // Backend returns grouped loans object: { activeLoans, redeemedLoans, forfeitedLoans, overdueLoans }
       // Flatten into single array for display
       let loans = [];
       if (response?.data) {
-        const { activeLoans = [], redeemedLoans = [], forfeitedLoans = [] } = response.data;
+        const { activeLoans = [], redeemedLoans = [], forfeitedLoans = [], overdueLoans = [] } = response.data;
         
         // Normalize field names for each loan (backend uses snake_case, frontend expects camelCase)
         const normalizeLoan = (loan) => {
@@ -255,13 +255,15 @@ const ManageCustomerProfileForm = ({ loggedInUser }) => {
         loans = [
           ...activeLoans.map(normalizeLoan),
           ...redeemedLoans.map(normalizeLoan),
-          ...forfeitedLoans.map(normalizeLoan)
+          ...forfeitedLoans.map(normalizeLoan),
+          ...overdueLoans.map(normalizeLoan)
         ];
         
         logger.debug('Received loans from backend', { 
           activeCount: activeLoans.length, 
           redeemedCount: redeemedLoans.length,
-          forfeitedCount: forfeitedLoans.length 
+          forfeitedCount: forfeitedLoans.length,
+          overdueCount: overdueLoans.length
         });
       }
       
@@ -547,7 +549,7 @@ const ManageCustomerProfileForm = ({ loggedInUser }) => {
       // Handle grouped loans response from backend
       let updatedLoans = [];
       if (loansResponse?.data) {
-        const { activeLoans = [], redeemedLoans = [], forfeitedLoans = [] } = loansResponse.data;
+        const { activeLoans = [], redeemedLoans = [], forfeitedLoans = [], overdueLoans = [] } = loansResponse.data;
         
         // Normalize field names for each loan (convert strings to numbers)
         const normalizeLoan = (loan) => {
@@ -582,7 +584,8 @@ const ManageCustomerProfileForm = ({ loggedInUser }) => {
         updatedLoans = [
           ...activeLoans.map(normalizeLoan),
           ...redeemedLoans.map(normalizeLoan),
-          ...forfeitedLoans.map(normalizeLoan)
+          ...forfeitedLoans.map(normalizeLoan),
+          ...overdueLoans.map(normalizeLoan)
         ];
       }
       setProfileLoans(updatedLoans);

@@ -650,6 +650,14 @@ const ViewCustomerLoansForm = ({ loggedInUser }) => {
                       {formatDateString(loan.dueDate)}
                     </p>
                   </div>
+                  {activeTab === 'overdue' && loan.daysOverdue !== undefined && (
+                    <div>
+                      <p style={{ margin: '0', fontSize: '12px', color: '#333', fontWeight: '600' }}>Days Overdue</p>
+                      <p style={{ margin: '5px 0 0 0', fontSize: '16px', fontWeight: 'bold', color: '#d32f2f' }}>
+                        ⚠️ {loan.daysOverdue} days
+                      </p>
+                    </div>
+                  )}
                 </div>
 
                 <p style={{ margin: '12px 0 0 0', fontSize: '13px', color: '#222', fontWeight: '600' }}>
