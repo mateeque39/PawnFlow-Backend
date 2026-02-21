@@ -3741,6 +3741,119 @@ app.get('/customers/:customerId/loans/:loanId/collateral-image', async (req, res
 
 // ======================== END CUSTOMER-CENTRIC LOAN MANAGEMENT ========================
 
+// ======================== PUBLIC API ENDPOINTS (FOR PRODUCTION/FRONTEND) ========================
+
+// HEALTH CHECK - GET /health
+app.get('/health', (req, res) => {
+  res.json({
+    status: 'ok',
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime(),
+    environment: process.env.NODE_ENV || 'development'
+  });
+});
+
+// GET ALL LOANS WITH OVERDUE INFO - GET /api/loans
+// Returns all loans from DB with computed isOverdue and daysOverdue fields
+// Optional query param: ?debug=1 to log detailed overdue information
+// No authentication required for this endpoint (can be restricted if needed)
+app.get('/api/loans', async (req, res) => {
+  try {
+    const debug = req.query.debug === '1';
+    const query = `
+      SELECT 
+        id,
+        customer_id,
+        customer_name,
+        loan_amount,
+        initial_loan_amount,
+        interest_rate,
+        interest_amount,
+        total_payable_amount,
+        loan_issued_date,
+        due_date,
+        status,
+        transaction_number,
+        remaining_balance,
+        first_name,
+        last_name,
+        email,
+        mobile_phone,
+        home_phone,
+        collateral_description,
+        item_description,
+        created_at,
+        updated_at
+      FROM loans
+      ORDER BY due_date DESC, created_at DESC
+    `;
+
+    const result = await pool.query(query);
+    
+    // Compute overdue fields for each loan
+    const loansWithOverdue = result.rows.map(loan => {
+      // Determine if loan should be filtered out from overdue calculation
+      const isClosedStatus = ['PAID', 'CLOSED', 'paid', 'closed'].includes(loan.status);
+      
+      // Check if due date exists and is valid
+      const hasDueDate = loan.due_date && !isNaN(new Date(loan.due_date).getTime());
+      
+      let isOverdue = false;
+      let daysOverdue = 0;
+      
+      if (hasDueDate && !isClosedStatus) {
+        const dueDateMs = new Date(loan.due_date).getTime();
+        const nowMs = Date.now();
+        
+        isOverdue = dueDateMs < nowMs;
+        
+        if (isOverdue) {
+          // Calculate days overdue
+          daysOverdue = Math.floor((nowMs - dueDateMs) / (1000 * 60 * 60 * 24));
+        }
+      }
+      
+      return {
+        ...loan,
+        isOverdue,
+        daysOverdue,
+        pdf_url: `/loan-pdf/${loan.id}`
+      };
+    });
+
+    // Log summary for monitoring
+    const overdueCount = loansWithOverdue.filter(l => l.isOverdue).length;
+    const summary = `📊 /api/loans: Returned ${loansWithOverdue.length} total loans, ${overdueCount} overdue`;
+    console.log(summary);
+    
+    // Log detailed overdue info if debug flag is set
+    if (debug && overdueCount > 0) {
+      const overdueList = loansWithOverdue.filter(l => l.isOverdue).map(l => ({
+        id: l.id,
+        customer: `${l.first_name || ''} ${l.last_name || ''}`.trim(),
+        dueDate: l.due_date,
+        daysOverdue: l.daysOverdue,
+        amount: l.loan_amount
+      }));
+      console.log('🔴 Overdue Loans Details:', JSON.stringify(overdueList, null, 2));
+    }
+
+    res.json({
+      count: loansWithOverdue.length,
+      overdueCount,
+      loans: loansWithOverdue
+    });
+  } catch (err) {
+    console.error('❌ Error fetching loans:', err);
+    res.status(500).json({ 
+      message: 'Error fetching loans', 
+      error: process.env.NODE_ENV === 'production' ? undefined : err.message 
+    });
+  }
+});
+
+// ======================== END PUBLIC API ENDPOINTS ========================
+
 // START SHIFT - User records opening cash balance
 app.post('/start-shift', async (req, res) => {
   const { userId, openingBalance } = req.body;
