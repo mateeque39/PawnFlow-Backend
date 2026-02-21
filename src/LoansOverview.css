@@ -1,0 +1,342 @@
+/* Loans Overview Component Styles */
+
+.loans-overview {
+  background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+  border-radius: 12px;
+  padding: 24px;
+  margin: 20px 0;
+  box-shadow: 0 8px 16px rgba(0, 0, 0, 0.3);
+  color: #e0e0e0;
+}
+
+.overview-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 24px;
+  padding-bottom: 16px;
+  border-bottom: 2px solid rgba(93, 217, 255, 0.3);
+}
+
+.overview-header h3 {
+  margin: 0;
+  font-size: 24px;
+  color: #5dd9ff;
+  font-weight: 600;
+}
+
+.btn-refresh {
+  background-color: #5dd9ff;
+  color: #1a1a2e;
+  border: none;
+  padding: 10px 16px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 14px;
+  transition: all 0.3s ease;
+}
+
+.btn-refresh:hover:not(:disabled) {
+  background-color: #3fb0d9;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(93, 217, 255, 0.3);
+}
+
+.btn-refresh:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* Message styles */
+.message {
+  padding: 16px;
+  border-radius: 8px;
+  margin-bottom: 20px;
+  font-weight: 500;
+  border-left: 4px solid;
+}
+
+.message-success {
+  background-color: rgba(46, 204, 113, 0.1);
+  border-left-color: #2ecc71;
+  color: #2ecc71;
+}
+
+.message-error {
+  background-color: rgba(231, 76, 60, 0.1);
+  border-left-color: #e74c3c;
+  color: #e74c3c;
+}
+
+/* Tabs */
+.tabs {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 24px;
+  border-bottom: 1px solid rgba(93, 217, 255, 0.2);
+  flex-wrap: wrap;
+}
+
+.tab-button {
+  background: none;
+  border: none;
+  color: #a0a0a0;
+  padding: 12px 16px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  position: relative;
+  border-bottom: 3px solid transparent;
+  margin-bottom: -1px;
+}
+
+.tab-button:hover {
+  color: #5dd9ff;
+}
+
+.tab-button.active {
+  color: #5dd9ff;
+  border-bottom-color: #5dd9ff;
+}
+
+/* Loans Container */
+.loans-container {
+  padding-top: 16px;
+}
+
+.loans-section {
+  margin-bottom: 24px;
+}
+
+.section-title {
+  font-size: 18px;
+  font-weight: 600;
+  color: #5dd9ff;
+  margin: 0 0 8px 0;
+}
+
+.section-subtitle {
+  font-size: 12px;
+  color: #808080;
+  margin: 0 0 16px 0;
+}
+
+.loans-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 16px;
+}
+
+/* Loan Card */
+.loan-card {
+  background: linear-gradient(135deg, #0f3460 0%, #16213e 100%);
+  border: 1px solid rgba(93, 217, 255, 0.2);
+  border-radius: 8px;
+  overflow: hidden;
+  transition: all 0.3s ease;
+  display: flex;
+  flex-direction: column;
+}
+
+.loan-card:hover {
+  border-color: rgba(93, 217, 255, 0.5);
+  box-shadow: 0 8px 24px rgba(93, 217, 255, 0.15);
+  transform: translateY(-4px);
+}
+
+.loan-card-header {
+  background: linear-gradient(90deg, rgba(93, 217, 255, 0.1) 0%, rgba(45, 52, 75, 0.1) 100%);
+  padding: 16px;
+  border-bottom: 1px solid rgba(93, 217, 255, 0.1);
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+}
+
+.loan-title {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.loan-title h4 {
+  margin: 0;
+  font-size: 16px;
+  color: #e0e0e0;
+  font-weight: 600;
+}
+
+.overdue-badge {
+  display: inline-block;
+  background-color: rgba(231, 76, 60, 0.2);
+  color: #e74c3c;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  width: fit-content;
+}
+
+.transaction-number {
+  color: #808080;
+  font-size: 12px;
+  white-space: nowrap;
+  margin-left: 8px;
+}
+
+.loan-card-body {
+  padding: 16px;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.loan-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 13px;
+  padding: 6px 0;
+  border-bottom: 1px solid rgba(93, 217, 255, 0.1);
+}
+
+.loan-row:last-child {
+  border-bottom: none;
+}
+
+.loan-row .label {
+  color: #a0a0a0;
+  font-weight: 500;
+}
+
+.loan-row .value {
+  color: #e0e0e0;
+  font-weight: 600;
+  text-align: right;
+  flex: 1;
+  margin-left: 12px;
+}
+
+.overdue-date {
+  color: #e74c3c !important;
+  font-weight: 700;
+}
+
+.status-badge {
+  display: inline-block;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 11px !important;
+  font-weight: 700;
+  text-align: center;
+  width: fit-content;
+}
+
+.status-active {
+  background-color: rgba(46, 204, 113, 0.2);
+  color: #2ecc71;
+}
+
+.status-paid {
+  background-color: rgba(52, 152, 219, 0.2);
+  color: #3498db;
+}
+
+.status-closed {
+  background-color: rgba(127, 140, 141, 0.2);
+  color: #95a5a6;
+}
+
+.status-forfeited {
+  background-color: rgba(230, 126, 34, 0.2);
+  color: #e67e22;
+}
+
+.status-redeemed {
+  background-color: rgba(155, 89, 182, 0.2);
+  color: #9b59b6;
+}
+
+/* No Loans State */
+.no-loans {
+  text-align: center;
+  padding: 40px 20px;
+  color: #808080;
+  font-size: 16px;
+}
+
+.no-loans p {
+  margin: 0;
+}
+
+/* Loading State */
+.loading {
+  text-align: center;
+  padding: 40px 20px;
+  color: #5dd9ff;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+  .loans-overview {
+    padding: 16px;
+  }
+
+  .overview-header {
+    flex-direction: column;
+    gap: 12px;
+    align-items: flex-start;
+  }
+
+  .loans-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .tabs {
+    gap: 8px;
+  }
+
+  .tab-button {
+    padding: 8px 12px;
+    font-size: 12px;
+  }
+
+  .loan-row {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .loan-row .value {
+    margin-left: 0;
+    margin-top: 4px;
+  }
+}
+
+@media (max-width: 480px) {
+  .loans-overview {
+    padding: 12px;
+    margin: 12px 0;
+  }
+
+  .overview-header h3 {
+    font-size: 18px;
+  }
+
+  .section-title {
+    font-size: 16px;
+  }
+
+  .loan-title h4 {
+    font-size: 14px;
+  }
+
+  .loan-row {
+    font-size: 12px;
+  }
+}

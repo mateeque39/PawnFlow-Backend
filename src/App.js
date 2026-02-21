@@ -6,6 +6,7 @@ import LoginForm from './LoginForm';
 import AdminPanel from './AdminPanel';
 import ShiftManagement from './ShiftManagement';
 import CashReport from './CashReport';
+import LoansOverview from './LoansOverview';
 import CreateCustomerProfileForm from './CreateCustomerProfileForm';
 import ManageCustomerProfileForm from './ManageCustomerProfileForm';
 import EditLoanForm from './EditLoanForm';
@@ -424,6 +425,7 @@ function App() {
           <div>
             <h2 style={{ textAlign: 'center', marginBottom: '20px' }}>Welcome to Dashboard, {loggedInUser.username}</h2>
             <div className="menu">
+              <button className="btn-primary" onClick={() => setSelectedOption('view-all-loans')}>📊 View All Loans (Overdue)</button>
               <button className="btn-primary" onClick={() => setSelectedOption('create-profile')}>👤 Create Customer Profile</button>
               <button className="btn-success" onClick={() => setSelectedOption('manage-profile')}>⚙️ Manage Profile & Loans</button>
               <button className="btn-info" onClick={() => setSelectedOption('edit-loan')}>✏️ Edit Existing Loan</button>
@@ -441,6 +443,7 @@ function App() {
 
             {/* Wrap the components inside ErrorBoundary to catch runtime errors */}
             <ErrorBoundary>
+              {selectedOption === 'view-all-loans' && <LoansOverview loggedInUser={loggedInUser} />}
               {selectedOption === 'create-profile' && <CreateCustomerProfileForm loggedInUser={loggedInUser} />}
               {selectedOption === 'manage-profile' && <ManageCustomerProfileForm loggedInUser={loggedInUser} />}
               {selectedOption === 'edit-loan' && <EditLoanForm loggedInUser={loggedInUser} />}
