@@ -450,12 +450,18 @@ const ViewCustomerLoansForm = ({ loggedInUser }) => {
             </div>
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '10px', marginBottom: '20px' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr 1fr', gap: '10px', marginBottom: '20px' }}>
             <div style={{ backgroundColor: '#d1ecf1', padding: '12px', borderRadius: '8px', textAlign: 'center' }}>
               <p style={{ margin: '0', fontSize: '18px', fontWeight: 'bold', color: '#0c5460' }}>
                 {loanCounts.active}
               </p>
               <p style={{ margin: '5px 0 0 0', fontSize: '12px', color: '#0c5460' }}>Active Loans</p>
+            </div>
+            <div style={{ backgroundColor: '#dc3545', padding: '12px', borderRadius: '8px', textAlign: 'center' }}>
+              <p style={{ margin: '0', fontSize: '18px', fontWeight: 'bold', color: 'white' }}>
+                {loanCounts.overdue}
+              </p>
+              <p style={{ margin: '5px 0 0 0', fontSize: '12px', color: 'white' }}>Overdue Loans</p>
             </div>
             <div style={{ backgroundColor: '#e2e3e5', padding: '12px', borderRadius: '8px', textAlign: 'center' }}>
               <p style={{ margin: '0', fontSize: '18px', fontWeight: 'bold', color: '#383d41' }}>
