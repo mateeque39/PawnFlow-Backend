@@ -1071,6 +1071,12 @@ const ManageCustomerProfileForm = ({ loggedInUser }) => {
                 ✓ Active ({profileLoans.filter(l => l.status?.toLowerCase() === 'active').length})
               </button>
               <button
+                className={`tab-button ${loansTab === 'overdue' ? 'active' : ''}`}
+                onClick={() => setLoansTab('overdue')}
+              >
+                ⚠️ Overdue ({profileLoans.filter(l => l.status?.toLowerCase() === 'overdue').length})
+              </button>
+              <button
                 className={`tab-button ${loansTab === 'redeemed' ? 'active' : ''}`}
                 onClick={() => setLoansTab('redeemed')}
               >
