@@ -1440,15 +1440,15 @@ app.post('/make-payment', authenticateToken, requireActiveShift, async (req, res
     if (isOverdue && !isFullPayment) {
       // Partial payment on overdue loan:
       // 1. Move from overdue to active
-      // 2. Extend due date by 1 month (30 days)
+      // 2. Extend due date by 1 month (from original due date)
       // 3. Recalculate interest on principal
       
       newStatus = 'active';
       
-      // Extend due date by 30 days
-      const today = new Date();
-      const extended = new Date(today);
-      extended.setDate(extended.getDate() + 30);
+      // Extend due date by 1 month (from loan's original due date)
+      const dueDate = new Date(loan.due_date);
+      const extended = new Date(dueDate);
+      extended.setMonth(extended.getMonth() + 1);
       const year = extended.getFullYear();
       const month = String(extended.getMonth() + 1).padStart(2, '0');
       const day = String(extended.getDate()).padStart(2, '0');
@@ -1464,6 +1464,7 @@ app.post('/make-payment', authenticateToken, requireActiveShift, async (req, res
       console.log(`   Payment amount: $${paymentAmount}`);
       console.log(`   New principal: $${newPrincipal}`);
       console.log(`   New interest (recalculated): $${newInterest}`);
+      console.log(`   Old due date: ${loan.due_date}`);
       console.log(`   New due date: ${newDueDate}`);
     }
     // REGULAR PAYMENT (NON-OVERDUE LOAN) - Interest Paid
@@ -1480,10 +1481,10 @@ app.post('/make-payment', authenticateToken, requireActiveShift, async (req, res
       // Recalculate interest on remaining principal
       newInterest = Math.round((newPrincipal * interestRate / 100) * 100) / 100;
 
-      // Extend due date by 30 days
-      const today = new Date();
-      const extended = new Date(today);
-      extended.setDate(extended.getDate() + 30);
+      // Extend due date by 1 month (from original due date)
+      const dueDate = new Date(loan.due_date);
+      const extended = new Date(dueDate);
+      extended.setMonth(extended.getMonth() + 1);
       const year = extended.getFullYear();
       const month = String(extended.getMonth() + 1).padStart(2, '0');
       const day = String(extended.getDate()).padStart(2, '0');
@@ -3283,10 +3284,10 @@ app.post('/customers/:customerId/loans/:loanId/payment', authenticateToken, requ
       newStatus = 'active';
       const loanPrincipal = parseFloat(loan.loan_amount || 0);
       
-      // Extend due date by 30 days
+      // Extend due date by 1 month (maintains same day of month)
       const dueDate = new Date(loan.due_date);
       const extended = new Date(dueDate);
-      extended.setDate(extended.getDate() + 30);
+      extended.setMonth(extended.getMonth() + 1);
       const year = extended.getFullYear();
       const month = String(extended.getMonth() + 1).padStart(2, '0');
       const day = String(extended.getDate()).padStart(2, '0');
