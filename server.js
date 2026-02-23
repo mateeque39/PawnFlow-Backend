@@ -1403,8 +1403,8 @@ app.post('/make-payment', authenticateToken, requireActiveShift, async (req, res
     const previouslyPaid = parseFloat(paymentHistoryResult.rows[0].total_paid || 0);
     const totalPaymentsAfter = previouslyPaid + parseFloat(paymentAmount);
 
-    // Update remaining balance after payment
-    const newRemainingBalance = parseFloat(loan.remaining_balance) - parseFloat(paymentAmount);
+    // Update remaining balance after payment (this represents principal left)
+    const principalRemaining = parseFloat(loan.remaining_balance) - parseFloat(paymentAmount);
 
     // Check if this is an overdue loan needing special handling
     const isOverdue = loan.status?.toLowerCase() === 'overdue';
@@ -1429,11 +1429,11 @@ app.post('/make-payment', authenticateToken, requireActiveShift, async (req, res
       const day = String(extended.getDate()).padStart(2, '0');
       newDueDate = `${year}-${month}-${day}`;
       
-      // Recalculate interest on remaining balance using the same interest rate
+      // Recalculate interest on remaining principal using the same interest rate
       const interestRate = parseFloat(loan.interest_rate || 2.5);
-      newInterestAmount = (parseFloat(loan.loan_amount) * interestRate / 100);
+      newInterestAmount = (Math.max(principalRemaining, 0) * interestRate / 100);
       
-      console.log(`🔄 Overdue loan ${loanId} being reactivated. New status: ${newStatus}, New interest: ${newInterestAmount}, New due date: ${newDueDate}`);
+      console.log(`🔄 Overdue loan ${loanId} being reactivated. Principal remaining: ${principalRemaining}, New interest: ${newInterestAmount}, New due date: ${newDueDate}`);
     } else if (!isOverdue) {
       // For non-overdue loans, only extend if interest is fully paid
       if (totalPaymentsAfter >= interestAmount) {
@@ -1445,14 +1445,22 @@ app.post('/make-payment', authenticateToken, requireActiveShift, async (req, res
         const month = String(extended.getMonth() + 1).padStart(2, '0');
         const day = String(extended.getDate()).padStart(2, '0');
         newDueDate = `${year}-${month}-${day}`;
+        
+        // Recalculate interest on remaining principal
+        const interestRate = parseFloat(loan.interest_rate || 2.5);
+        newInterestAmount = (Math.max(principalRemaining, 0) * interestRate / 100);
+        
         console.log('📅 Due date extended automatically. Old:', dueDate, 'New:', newDueDate);
       }
     }
 
+    // Calculate total remaining balance = principal remaining + new interest
+    const totalRemainingBalance = Math.max(principalRemaining, 0) + newInterestAmount;
+
     // Update the loan details with the new remaining balance, due date, status, and interest
     const updatedLoanResult = await pool.query(
       'UPDATE loans SET remaining_balance = $1, due_date = $2, status = $3, interest_amount = $4 WHERE id = $5 RETURNING *',
-      [Math.max(newRemainingBalance, 0), newDueDate, newStatus, newInterestAmount, loanId]
+      [totalRemainingBalance, newDueDate, newStatus, newInterestAmount, loanId]
     );
 
     // Insert payment history
@@ -1461,13 +1469,10 @@ app.post('/make-payment', authenticateToken, requireActiveShift, async (req, res
       [loanId, paymentMethod, paymentAmount, userId || null]
     );
 
-    // Recalculate total payable amount (loan amount + new interest)
-    const newTotalPayableAmount = parseFloat(loan.loan_amount) + newInterestAmount;
-
-    // Update total payable amount in the loan record
+    // Update total payable amount (principal remaining + new interest)
     await pool.query(
       'UPDATE loans SET total_payable_amount = $1 WHERE id = $2',
-      [newTotalPayableAmount, loanId]
+      [totalRemainingBalance, loanId]
     );
 
     // Generate receipt PDF with updated loan information (including new due date)
@@ -1483,7 +1488,7 @@ app.post('/make-payment', authenticateToken, requireActiveShift, async (req, res
     }
 
     // Check if the loan is fully paid
-    if (newRemainingBalance === 0) {
+    if (totalRemainingBalance === 0) {
       res.status(200).json({
         message: 'Loan fully paid off! Ready for redemption.',
         loan: updatedLoanResult.rows[0],
