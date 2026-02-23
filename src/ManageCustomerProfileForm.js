@@ -1319,6 +1319,58 @@ const ManageCustomerProfileForm = ({ loggedInUser }) => {
                       </div>
                     )}
 
+                    {loan.status?.toLowerCase() === 'overdue' && (
+                      <div style={{ display: 'flex', gap: '10px', marginTop: '12px', flexWrap: 'wrap' }}>
+                        <button
+                          onClick={() => {
+                            setSelectedLoan(loan);
+                            setOperationType('payment');
+                            setShowLoanForm(true);
+                            setActiveTab('operations');
+                          }}
+                          className="btn-info"
+                          style={{ flex: 1, minWidth: '120px' }}
+                          title="Make payment to resolve overdue status"
+                        >
+                          💳 Make Payment
+                        </button>
+                        <button
+                          onClick={() => {
+                            setSelectedLoan(loan);
+                            setOperationType('extend');
+                            setShowLoanForm(true);
+                            setActiveTab('operations');
+                          }}
+                          className="btn-warning"
+                          style={{ flex: 1, minWidth: '120px' }}
+                          title="Extend the due date for this overdue loan"
+                        >
+                          📅 Extend Loan
+                        </button>
+                        <button
+                          onClick={() => {
+                            setSelectedLoan(loan);
+                            setOperationType('redeem');
+                            setShowLoanForm(true);
+                            setActiveTab('operations');
+                          }}
+                          className="btn-success"
+                          style={{ flex: 1, minWidth: '120px' }}
+                          title="Redeem this loan to close it"
+                        >
+                          ✓ Redeem
+                        </button>
+                        <button
+                          onClick={() => handleDownloadReceipt(loan)}
+                          className="btn-secondary"
+                          style={{ flex: 1, minWidth: '120px' }}
+                          title="Download receipt PDF for this loan"
+                        >
+                          📥 Re-download Receipt
+                        </button>
+                      </div>
+                    )}
+
                     {loan.status?.toLowerCase() === 'forfeited' && (
                       <div style={{ marginTop: '12px', display: 'flex', gap: '10px' }}>
                         <button
