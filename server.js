@@ -3113,15 +3113,16 @@ app.get('/customers/:customerId/loans', async (req, res) => {
       return formatted;
     });
 
-    // Categorize loans
+    // Categorize loans - PRIORITIZe database status field
     const activeLoans = loans.filter(l => {
       const match = l.status === 'active' && !l.isOverdue;
       console.log(`  activeLoans filter: Loan ${l.id} status='${l.status}' isOverdue=${l.isOverdue} → ${match ? '✓ INCLUDED' : '✗ excluded'}`);
       return match;
     });
     const overdueLoans = loans.filter(l => {
-      const match = l.isOverdue;
-      console.log(`  overdueLoans filter: Loan ${l.id} isOverdue=${l.isOverdue} → ${match ? '✓ INCLUDED' : '✗ excluded'}`);
+      // Include if database status is 'overdue' OR if due date has passed
+      const match = l.status === 'overdue' || l.isOverdue;
+      console.log(`  overdueLoans filter: Loan ${l.id} status='${l.status}' isOverdue=${l.isOverdue} → ${match ? '✓ INCLUDED' : '✗ excluded'}`);
       return match;
     });
     const redeemedLoans = loans.filter(l => {
