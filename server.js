@@ -1559,6 +1559,59 @@ app.get('/debug/loan/:loanId', async (req, res) => {
   }
 });
 
+// Debug endpoint to check all loans for a customer
+app.get('/debug/customer/:customerId/loans', async (req, res) => {
+  try {
+    const { customerId } = req.params;
+    
+    // Get ALL loans regardless of status
+    const allLoansResult = await pool.query(
+      'SELECT id, status, customer_id, remaining_balance, interest_amount, due_date, loan_amount FROM loans WHERE customer_id = $1 ORDER BY id DESC',
+      [customerId]
+    );
+    
+    console.log(`🔍 DEBUG: Customer ${customerId} - Found ${allLoansResult.rows.length} loans total`);
+    
+    if (allLoansResult.rows.length === 0) {
+      return res.json({
+        message: `No loans found for customer ${customerId}`,
+        customerId,
+        loansCount: 0,
+        allLoans: []
+      });
+    }
+    
+    // Analyze each loan
+    const loansAnalysis = allLoansResult.rows.map(loan => {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      
+      const dueDate = new Date(loan.due_date);
+      dueDate.setHours(0, 0, 0, 0);
+      
+      const isOverdue = dueDate < today;
+      
+      console.log(`  Loan ${loan.id}: status='${loan.status}', isOverdue=${isOverdue}, remaining=${loan.remaining_balance}`);
+      
+      return {
+        ...loan,
+        isOverdue,
+        dueDate_formatted: loan.due_date
+      };
+    });
+    
+    res.json({
+      message: 'All loans for customer',
+      customerId,
+      loansCount: allLoansResult.rows.length,
+      allLoans: loansAnalysis
+    });
+  } catch (err) {
+    console.error('Error in debug customer loans endpoint:', err);
+    res.status(500).json({ message: 'Error', error: err.message });
+  }
+});
+
 
 
 // ---------------------------- REDEEM LOAN ----------------------------
@@ -3000,19 +3053,39 @@ app.get('/customers/:customerId/loans', async (req, res) => {
     // Group loans by status AND by overdue status for active loans
     const loans = result.rows.map(loan => {
       const overdueInfo = computeOverdueInfo(loan);
-      return {
+      const formatted = {
         ...validators.formatLoanResponse(loan),
         pdf_url: `/loan-pdf/${loan.id}`,
         isOverdue: overdueInfo.isOverdue,
         daysOverdue: overdueInfo.daysOverdue
       };
+      console.log(`📊 Loan ${loan.id}: status='${loan.status}' (type: ${typeof loan.status}), formatted.status='${formatted.status}', isOverdue=${formatted.isOverdue}`);
+      return formatted;
     });
 
     // Categorize loans
-    const activeLoans = loans.filter(l => l.status === 'active' && !l.isOverdue);
-    const overdueLoans = loans.filter(l => l.isOverdue); // Any status can be overdue, but we exclude PAID/CLOSED in computation
-    const redeemedLoans = loans.filter(l => l.status === 'redeemed');
-    const forfeitedLoans = loans.filter(l => l.status === 'forfeited');
+    const activeLoans = loans.filter(l => {
+      const match = l.status === 'active' && !l.isOverdue;
+      console.log(`  activeLoans filter: Loan ${l.id} status='${l.status}' isOverdue=${l.isOverdue} → ${match ? '✓ INCLUDED' : '✗ excluded'}`);
+      return match;
+    });
+    const overdueLoans = loans.filter(l => {
+      const match = l.isOverdue;
+      console.log(`  overdueLoans filter: Loan ${l.id} isOverdue=${l.isOverdue} → ${match ? '✓ INCLUDED' : '✗ excluded'}`);
+      return match;
+    });
+    const redeemedLoans = loans.filter(l => {
+      const match = l.status === 'redeemed';
+      console.log(`  redeemedLoans filter: Loan ${l.id} status='${l.status}' → ${match ? '✓ INCLUDED' : '✗ excluded'}`);
+      return match;
+    });
+    const forfeitedLoans = loans.filter(l => {
+      const match = l.status === 'forfeited';
+      console.log(`  forfeitedLoans filter: Loan ${l.id} status='${l.status}' → ${match ? '✓ INCLUDED' : '✗ excluded'}`);
+      return match;
+    });
+
+    console.log(`🎯 Customer ${customerIdNum} loans summary: active=${activeLoans.length}, overdue=${overdueLoans.length}, redeemed=${redeemedLoans.length}, forfeited=${forfeitedLoans.length}`);
 
     res.json({
       activeLoans,
