@@ -1441,7 +1441,7 @@ app.post('/make-payment', authenticateToken, requireActiveShift, async (req, res
       // Partial payment on overdue loan:
       // 1. Move from overdue to active
       // 2. Extend due date by 1 month (30 days)
-      // 3. Recalculate and add interest on remaining balance
+      // 3. Recalculate interest on principal
       
       newStatus = 'active';
       
@@ -1455,15 +1455,15 @@ app.post('/make-payment', authenticateToken, requireActiveShift, async (req, res
       newDueDate = `${year}-${month}-${day}`;
       dueDateExtended = true;
       
-      // Calculate new interest on remaining balance
-      newInterest = Math.round((remainingAfterPayment * interestRate / 100) * 100) / 100;
-      newPrincipal = remainingAfterPayment;
+      // Interest recalculation on principal (ALWAYS recalculate for new term)
+      newPrincipal = loanPrincipal; // Principal remains same for overdue partial payment
+      newInterest = Math.round((loanPrincipal * interestRate / 100) * 100) / 100;
       
       console.log(`🔴 OVERDUE LOAN PARTIAL PAYMENT:`);
       console.log(`   Status: overdue → active`);
-      console.log(`   Remaining before interest: $${remainingAfterPayment}`);
-      console.log(`   Interest rate: ${interestRate}%`);
-      console.log(`   New interest: $${newInterest}`);
+      console.log(`   Payment amount: $${paymentAmount}`);
+      console.log(`   New principal: $${newPrincipal}`);
+      console.log(`   New interest (recalculated): $${newInterest}`);
       console.log(`   New due date: ${newDueDate}`);
     }
     // REGULAR PAYMENT (NON-OVERDUE LOAN) - Interest Paid
