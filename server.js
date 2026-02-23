@@ -1410,8 +1410,8 @@ app.post('/make-payment', authenticateToken, requireActiveShift, async (req, res
     const isOverdue = loan.status?.toLowerCase() === 'overdue';
     const interestAmount = parseFloat(loan.interest_amount || 0);
     
-    // Determine new loan status
-    let newStatus = loan.status; // Keep existing status by default
+    // Determine new loan status - ensure lowercase
+    let newStatus = loan.status?.toLowerCase() || 'active'; // Normalize to lowercase, default to active
     let newDueDate = loan.due_date;
     let newInterestAmount = interestAmount;
     
@@ -1434,8 +1434,8 @@ app.post('/make-payment', authenticateToken, requireActiveShift, async (req, res
       newInterestAmount = (Math.max(principalRemaining, 0) * interestRate / 100);
       
       console.log(`🔄 Overdue loan ${loanId} being reactivated. Principal remaining: ${principalRemaining}, New interest: ${newInterestAmount}, New due date: ${newDueDate}`);
-    } else if (!isOverdue) {
-      // For non-overdue loans, only extend if interest is fully paid
+    } else if (!isOverdue && newStatus === 'active') {
+      // For active loans, only extend if interest is fully paid
       if (totalPaymentsAfter >= interestAmount) {
         const dueDate = new Date(loan.due_date);
         const extended = new Date(dueDate);
@@ -1456,6 +1456,8 @@ app.post('/make-payment', authenticateToken, requireActiveShift, async (req, res
 
     // Calculate total remaining balance = principal remaining + new interest
     const totalRemainingBalance = Math.max(principalRemaining, 0) + newInterestAmount;
+
+    console.log(`📝 Payment processing - Loan ${loanId}: status will be set to '${newStatus}', remaining balance: ${totalRemainingBalance}`);
 
     // Update the loan details with the new remaining balance, due date, status, and interest
     const updatedLoanResult = await pool.query(
