@@ -1441,7 +1441,7 @@ app.post('/make-payment', authenticateToken, requireActiveShift, async (req, res
       // Partial payment on overdue loan:
       // 1. Move from overdue to active
       // 2. Extend due date by 1 month (from original due date)
-      // 3. Recalculate interest on principal
+      // 3. Recalculate interest on REMAINING BALANCE AFTER PAYMENT
       
       newStatus = 'active';
       
@@ -1455,15 +1455,20 @@ app.post('/make-payment', authenticateToken, requireActiveShift, async (req, res
       newDueDate = `${year}-${month}-${day}`;
       dueDateExtended = true;
       
-      // Interest recalculation on principal (ALWAYS recalculate for new term)
-      newPrincipal = loanPrincipal; // Principal remains same for overdue partial payment
-      newInterest = Math.round((loanPrincipal * interestRate / 100) * 100) / 100;
+      // After payment, remaining balance is reduced
+      const remainingAfterPayment = Math.max(remainingBalance - parseFloat(paymentAmount), 0);
+      
+      // Interest recalculation on REMAINING BALANCE (the reduced amount after payment)
+      newPrincipal = remainingAfterPayment;
+      newInterest = Math.round((remainingAfterPayment * interestRate / 100) * 100) / 100;
       
       console.log(`🔴 OVERDUE LOAN PARTIAL PAYMENT:`);
       console.log(`   Status: overdue → active`);
       console.log(`   Payment amount: $${paymentAmount}`);
-      console.log(`   New principal: $${newPrincipal}`);
-      console.log(`   New interest (recalculated): $${newInterest}`);
+      console.log(`   Remaining before payment: $${remainingBalance}`);
+      console.log(`   Remaining after payment: $${remainingAfterPayment}`);
+      console.log(`   New interest (on remaining): $${newInterest}`);
+      console.log(`   New total remaining: $${remainingAfterPayment + newInterest}`);
       console.log(`   Old due date: ${loan.due_date}`);
       console.log(`   New due date: ${newDueDate}`);
     }
@@ -3278,11 +3283,13 @@ app.post('/customers/:customerId/loans/:loanId/payment', authenticateToken, requ
     if (isOverdue && !isFullPayment) {
       // Partial payment on overdue loan:
       // 1. Move from overdue to active
-      // 2. Extend due date by 1 month (30 days)
-      // 3. Recalculate interest on principal (NOT on remaining balance)
+      // 2. Extend due date by 1 month
+      // 3. Recalculate interest on REMAINING BALANCE AFTER PAYMENT
       
       newStatus = 'active';
-      const loanPrincipal = parseFloat(loan.loan_amount || 0);
+      
+      // Remaining after payment is deducted
+      const remainingAfterPayment = Math.max(finalBalance, 0);
       
       // Extend due date by 1 month (maintains same day of month)
       const dueDate = new Date(loan.due_date);
@@ -3293,17 +3300,18 @@ app.post('/customers/:customerId/loans/:loanId/payment', authenticateToken, requ
       const day = String(extended.getDate()).padStart(2, '0');
       newDueDate = `${year}-${month}-${day}`;
       
-      // Calculate new interest on principal (ALWAYS on original loan amount)
-      const newInterest = Math.round((loanPrincipal * interestRate / 100) * 100) / 100;
-      newRemainingBalanceAfterInterest = loanPrincipal + newInterest;
+      // Calculate new interest on REMAINING BALANCE (the reduced amount after payment)
+      const newInterest = Math.round((remainingAfterPayment * interestRate / 100) * 100) / 100;
+      newRemainingBalanceAfterInterest = remainingAfterPayment + newInterest;
       newInterestAmount = newInterest;
       
       console.log(`📅 OVERDUE LOAN HANDLING:`);
       console.log(`   Loan ID: ${loanIdNum}`);
       console.log(`   Status: overdue → active`);
-      console.log(`   Principal: $${loanPrincipal}`);
-      console.log(`   Interest Rate: ${interestRate}%`);
-      console.log(`   New Interest (on principal): $${newInterest.toFixed(2)}`);
+      console.log(`   Payment amount: $${paymentAmount.toFixed(2)}`);
+      console.log(`   Remaining before payment: $${parseFloat(loan.remaining_balance).toFixed(2)}`);
+      console.log(`   Remaining after payment: $${remainingAfterPayment.toFixed(2)}`);
+      console.log(`   New Interest (on remaining): $${newInterest.toFixed(2)}`);
       console.log(`   New Remaining Balance: $${newRemainingBalanceAfterInterest.toFixed(2)}`);
       console.log(`   Old Due Date: ${loan.due_date}`);
       console.log(`   New Due Date: ${newDueDate}`);
