@@ -1422,6 +1422,13 @@ app.post('/make-payment', authenticateToken, requireActiveShift, async (req, res
     let newInterest = currentInterest;
     let newDueDate = loan.due_date;
     let dueDateExtended = false;
+    const isOverdue = currentStatus === 'overdue';
+
+    // Calculate remaining balance after this payment
+    const remainingAfterPayment = Math.max(currentRemaining - parseFloat(paymentAmount), 0);
+    const isFullPayment = remainingAfterPayment === 0;
+
+    console.log(`  Remaining after payment: ${remainingAfterPayment}, Full payment: ${isFullPayment}`);
 
     // If full interest payment (or more)
     const paymentCoversInterest = newTotalPaid >= currentInterest;
@@ -1429,7 +1436,38 @@ app.post('/make-payment', authenticateToken, requireActiveShift, async (req, res
     console.log(`  Total payments after this: ${newTotalPaid}, Current interest: ${currentInterest}`);
     console.log(`  Payment covers interest: ${paymentCoversInterest}`);
 
-    if (paymentCoversInterest) {
+    // OVERDUE LOAN LOGIC - Partial Payment
+    if (isOverdue && !isFullPayment) {
+      // Partial payment on overdue loan:
+      // 1. Move from overdue to active
+      // 2. Extend due date by 1 month (30 days)
+      // 3. Recalculate and add interest on remaining balance
+      
+      newStatus = 'active';
+      
+      // Extend due date by 30 days
+      const today = new Date();
+      const extended = new Date(today);
+      extended.setDate(extended.getDate() + 30);
+      const year = extended.getFullYear();
+      const month = String(extended.getMonth() + 1).padStart(2, '0');
+      const day = String(extended.getDate()).padStart(2, '0');
+      newDueDate = `${year}-${month}-${day}`;
+      dueDateExtended = true;
+      
+      // Calculate new interest on remaining balance
+      newInterest = Math.round((remainingAfterPayment * interestRate / 100) * 100) / 100;
+      newPrincipal = remainingAfterPayment;
+      
+      console.log(`🔴 OVERDUE LOAN PARTIAL PAYMENT:`);
+      console.log(`   Status: overdue → active`);
+      console.log(`   Remaining before interest: $${remainingAfterPayment}`);
+      console.log(`   Interest rate: ${interestRate}%`);
+      console.log(`   New interest: $${newInterest}`);
+      console.log(`   New due date: ${newDueDate}`);
+    }
+    // REGULAR PAYMENT (NON-OVERDUE LOAN) - Interest Paid
+    else if (paymentCoversInterest && !isOverdue) {
       // Interest is paid! Now recalculate for next term
 
       // Calculate new principal remaining after payment
@@ -1451,12 +1489,6 @@ app.post('/make-payment', authenticateToken, requireActiveShift, async (req, res
       const day = String(extended.getDate()).padStart(2, '0');
       newDueDate = `${year}-${month}-${day}`;
       dueDateExtended = true;
-
-      // If overdue, mark as active
-      if (currentStatus === 'overdue') {
-        newStatus = 'active';
-        console.log(`  ✓ Status: OVERDUE → ACTIVE`);
-      }
 
       console.log(`  ✓ New due date: ${newDueDate}`);
       console.log(`  ✓ New interest: ${newInterest}`);
@@ -1504,27 +1536,33 @@ app.post('/make-payment', authenticateToken, requireActiveShift, async (req, res
         paymentHistory: paymentResult.rows[0],
         receiptPDF: receiptPDF,
         dueDateExtended: dueDateExtended,
-        overdueResolved: currentStatus === 'overdue' && paymentCoversInterest
+        overdueResolved: isOverdue && newStatus === 'active'
       });
     } else {
+      let responseMessage = 'Payment successfully processed!';
+      if (isOverdue && newStatus === 'active') {
+        responseMessage = `✅ Partial payment received on overdue loan! Status changed from 'overdue' to 'active'. Due date extended to ${newDueDate}. Interest recalculated on remaining balance.`;
+      }
+      
       res.status(200).json({
-        message: 'Payment successfully processed!',
+        message: responseMessage,
         loan: updatedLoanResult.rows[0],
         paymentHistory: paymentResult.rows[0],
         receiptPDF: receiptPDF,
         dueDateExtended: dueDateExtended,
-        overdueResolved: currentStatus === 'overdue' && paymentCoversInterest
+        overdueResolved: isOverdue && newStatus === 'active',
+        overdueLoanDetails: isOverdue && newStatus === 'active' ? {
+          previousStatus: 'overdue',
+          newStatus: 'active',
+          remainingBalance: newTotalRemaining.toFixed(2),
+          newDueDate: newDueDate,
+          newInterestAmount: newInterest.toFixed(2)
+        } : null
       });
     }
   } catch (err) {
     console.error('❌ Error making payment:', err);
     res.status(500).json({ message: 'Error making payment', error: err.message });
-  }
-});
-
-  } catch (err) {
-    console.error('Error making payment:', err);
-    res.status(500).json({ message: 'Error making payment' });
   }
 });
 
@@ -3223,14 +3261,53 @@ app.post('/customers/:customerId/loans/:loanId/payment', authenticateToken, requ
     const finalBalance = Math.max(newRemainingBalance, 0);
 
     // If balance reaches 0, automatically redeem the loan
-    const newStatus = finalBalance === 0 ? 'redeemed' : loan.status;
+    let newStatus = finalBalance === 0 ? 'redeemed' : loan.status;
 
     // Check if we should extend the due date
     let newDueDate = loan.due_date;
-    const interestAmount = parseFloat(loan.interest_amount || 0);
+    let newRemainingBalanceAfterInterest = finalBalance;
+    let newInterestAmount = parseFloat(loan.interest_amount || 0);
+    const interestRate = parseFloat(loan.interest_rate || 0);
     
-    // If interest is paid, extend it by 30 days (regardless of due date status)
-    if (totalPaymentsAfter >= interestAmount) {
+    const isOverdue = loan.status === 'overdue';
+    const isFullPayment = finalBalance === 0;
+    
+    // OVERDUE LOAN LOGIC
+    if (isOverdue && !isFullPayment) {
+      // Partial payment on overdue loan:
+      // 1. Move from overdue to active
+      // 2. Extend due date by 1 month (30 days)
+      // 3. Add interest again on remaining balance
+      
+      newStatus = 'active';
+      
+      // Extend due date by 30 days
+      const dueDate = new Date(loan.due_date);
+      const extended = new Date(dueDate);
+      extended.setDate(extended.getDate() + 30);
+      const year = extended.getFullYear();
+      const month = String(extended.getMonth() + 1).padStart(2, '0');
+      const day = String(extended.getDate()).padStart(2, '0');
+      newDueDate = `${year}-${month}-${day}`;
+      
+      // Calculate and add new interest on remaining balance
+      const newInterest = (finalBalance * interestRate) / 100;
+      newRemainingBalanceAfterInterest = finalBalance + newInterest;
+      newInterestAmount = newInterest;
+      
+      console.log(`📅 OVERDUE LOAN HANDLING:`);
+      console.log(`   Loan ID: ${loanIdNum}`);
+      console.log(`   Status: overdue → active`);
+      console.log(`   Old Remaining Balance: $${finalBalance}`);
+      console.log(`   Interest Rate: ${interestRate}%`);
+      console.log(`   New Interest: $${newInterest.toFixed(2)}`);
+      console.log(`   New Remaining Balance: $${newRemainingBalanceAfterInterest.toFixed(2)}`);
+      console.log(`   Old Due Date: ${loan.due_date}`);
+      console.log(`   New Due Date: ${newDueDate}`);
+    } 
+    // REGULAR PAYMENT (NON-OVERDUE LOAN)
+    else if (totalPaymentsAfter >= interestAmount && !isOverdue) {
+      // If interest is paid on active/non-overdue loans, extend it by 30 days
       const dueDate = new Date(loan.due_date);
       const extended = new Date(dueDate);
       extended.setDate(extended.getDate() + 30);
@@ -3244,8 +3321,8 @@ app.post('/customers/:customerId/loans/:loanId/payment', authenticateToken, requ
 
     // Update the loan details with the new remaining balance, status, and due date if needed
     const updatedLoanResult = await pool.query(
-      'UPDATE loans SET remaining_balance = $1, status = $2, due_date = $3 WHERE id = $4 RETURNING *',
-      [finalBalance, newStatus, newDueDate, loanIdNum]
+      'UPDATE loans SET remaining_balance = $1, interest_amount = $2, status = $3, due_date = $4 WHERE id = $5 RETURNING *',
+      [newRemainingBalanceAfterInterest, newInterestAmount, newStatus, newDueDate, loanIdNum]
     );
 
     // Insert payment history with default payment method if not provided
@@ -3285,12 +3362,31 @@ app.post('/customers/:customerId/loans/:loanId/payment', authenticateToken, requ
         ...updatedLoanResult.rows[0],
         interest_amount: ensureInterestAmount(updatedLoanResult.rows[0])
       };
+      
+      // Build appropriate response message based on what happened
+      let responseMessage = 'Payment successfully processed!';
+      let overdueLoanHandled = false;
+      
+      if (isOverdue && newStatus === 'active') {
+        responseMessage = `✅ Partial payment received on overdue loan! Status changed from 'overdue' to 'active'. Due date extended to ${newDueDate}. Interest recalculated on remaining balance.`;
+        overdueLoanHandled = true;
+      }
+      
       res.status(200).json({
-        message: 'Payment successfully processed!',
+        message: responseMessage,
         loan: validators.formatLoanResponse(loanWithInterest),
         paymentHistory: paymentResult.rows[0],
         receiptPDF: receiptPDF, // Include receipt PDF in response
-        dueDateExtended: totalPaymentsAfter >= interestAmount
+        dueDateExtended: totalPaymentsAfter >= interestAmount,
+        overdueLoanHandled: overdueLoanHandled,
+        details: isOverdue && newStatus === 'active' ? {
+          previousRemainingBalance: finalBalance.toFixed(2),
+          interestRate: `${interestRate}%`,
+          newInterestAmount: newInterestAmount.toFixed(2),
+          newRemainingBalance: newRemainingBalanceAfterInterest.toFixed(2),
+          newDueDate: newDueDate,
+          statusChange: 'overdue → active'
+        } : null
       });
     }
   } catch (err) {
