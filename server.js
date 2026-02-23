@@ -1514,8 +1514,48 @@ app.post('/make-payment', authenticateToken, requireActiveShift, async (req, res
   }
 });
 
-
-
+// Debug endpoint to check loan details
+app.get('/debug/loan/:loanId', async (req, res) => {
+  try {
+    const { loanId } = req.params;
+    const result = await pool.query('SELECT * FROM loans WHERE id = $1', [loanId]);
+    const loan = result.rows[0];
+    
+    if (!loan) {
+      return res.status(404).json({ message: 'Loan not found' });
+    }
+    
+    // Calculate if overdue
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    
+    const dueDate = new Date(loan.due_date);
+    dueDate.setHours(0, 0, 0, 0);
+    
+    const isOverdue = dueDate < today;
+    const daysOverdue = Math.floor((today - dueDate) / (1000 * 60 * 60 * 24));
+    
+    res.json({
+      loan: {
+        id: loan.id,
+        status: loan.status,
+        remaining_balance: loan.remaining_balance,
+        interest_amount: loan.interest_amount,
+        total_payable_amount: loan.total_payable_amount,
+        due_date: loan.due_date,
+        due_date_as_date: dueDate,
+        today_as_date: today,
+        isOverdue,
+        daysOverdue,
+        loan_amount: loan.loan_amount,
+        interest_rate: loan.interest_rate
+      }
+    });
+  } catch (err) {
+    console.error('Error in debug endpoint:', err);
+    res.status(500).json({ message: 'Error', error: err.message });
+  }
+});
 
 
 
