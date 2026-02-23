@@ -1395,7 +1395,7 @@ app.post('/make-payment', authenticateToken, requireActiveShift, async (req, res
       return res.status(404).json({ message: 'Loan not found' });
     }
 
-    // Get total payments made so far (including this one)
+    // Get total payments made so far (not including this one)
     const paymentHistoryResult = await pool.query(
       'SELECT SUM(payment_amount) as total_paid FROM payment_history WHERE loan_id = $1',
       [loanId]
@@ -1406,27 +1406,53 @@ app.post('/make-payment', authenticateToken, requireActiveShift, async (req, res
     // Update remaining balance after payment
     const newRemainingBalance = parseFloat(loan.remaining_balance) - parseFloat(paymentAmount);
 
-    // Check if we should extend the due date
-    let newDueDate = loan.due_date;
+    // Check if this is an overdue loan needing special handling
+    const isOverdue = loan.status?.toLowerCase() === 'overdue';
     const interestAmount = parseFloat(loan.interest_amount || 0);
     
-    // If interest is paid, extend it by 30 days (regardless of due date status)
-    if (totalPaymentsAfter >= interestAmount) {
-      const dueDate = new Date(loan.due_date);
-      const extended = new Date(dueDate);
+    // Determine new loan status
+    let newStatus = loan.status; // Keep existing status by default
+    let newDueDate = loan.due_date;
+    let newInterestAmount = interestAmount;
+    
+    // If overdue loan and payment includes full interest, reactivate it
+    if (isOverdue && totalPaymentsAfter >= interestAmount) {
+      newStatus = 'active'; // Mark as active again
+      
+      // Extend due date by 30 days from today (for overdue loans)
+      const today = new Date();
+      const extended = new Date(today);
       extended.setDate(extended.getDate() + 30);
       // Format date as YYYY-MM-DD string for PostgreSQL
       const year = extended.getFullYear();
       const month = String(extended.getMonth() + 1).padStart(2, '0');
       const day = String(extended.getDate()).padStart(2, '0');
       newDueDate = `${year}-${month}-${day}`;
-      console.log('📅 Due date extended automatically. Old:', dueDate, 'New:', newDueDate);
+      
+      // Recalculate interest on remaining balance using the same interest rate
+      const interestRate = parseFloat(loan.interest_rate || 2.5);
+      newInterestAmount = (parseFloat(loan.loan_amount) * interestRate / 100);
+      
+      console.log(`🔄 Overdue loan ${loanId} being reactivated. New status: ${newStatus}, New interest: ${newInterestAmount}, New due date: ${newDueDate}`);
+    } else if (!isOverdue) {
+      // For non-overdue loans, only extend if interest is fully paid
+      if (totalPaymentsAfter >= interestAmount) {
+        const dueDate = new Date(loan.due_date);
+        const extended = new Date(dueDate);
+        extended.setDate(extended.getDate() + 30);
+        // Format date as YYYY-MM-DD string for PostgreSQL
+        const year = extended.getFullYear();
+        const month = String(extended.getMonth() + 1).padStart(2, '0');
+        const day = String(extended.getDate()).padStart(2, '0');
+        newDueDate = `${year}-${month}-${day}`;
+        console.log('📅 Due date extended automatically. Old:', dueDate, 'New:', newDueDate);
+      }
     }
 
-    // Update the loan details with the new remaining balance and due date if needed
+    // Update the loan details with the new remaining balance, due date, status, and interest
     const updatedLoanResult = await pool.query(
-      'UPDATE loans SET remaining_balance = $1, due_date = $2 WHERE id = $3 RETURNING *',
-      [Math.max(newRemainingBalance, 0), newDueDate, loanId]  // Ensure it doesn't go negative
+      'UPDATE loans SET remaining_balance = $1, due_date = $2, status = $3, interest_amount = $4 WHERE id = $5 RETURNING *',
+      [Math.max(newRemainingBalance, 0), newDueDate, newStatus, newInterestAmount, loanId]
     );
 
     // Insert payment history
@@ -1435,8 +1461,8 @@ app.post('/make-payment', authenticateToken, requireActiveShift, async (req, res
       [loanId, paymentMethod, paymentAmount, userId || null]
     );
 
-    // Recalculate total payable amount (loan amount + interest)
-    const newTotalPayableAmount = parseFloat(loan.loan_amount) + (parseFloat(loan.loan_amount) * parseFloat(loan.interest_rate) / 100);
+    // Recalculate total payable amount (loan amount + new interest)
+    const newTotalPayableAmount = parseFloat(loan.loan_amount) + newInterestAmount;
 
     // Update total payable amount in the loan record
     await pool.query(
@@ -1463,7 +1489,8 @@ app.post('/make-payment', authenticateToken, requireActiveShift, async (req, res
         loan: updatedLoanResult.rows[0],
         paymentHistory: paymentResult.rows[0],
         receiptPDF: receiptPDF, // Include receipt PDF in response
-        dueDateExtended: totalPaymentsAfter >= interestAmount
+        dueDateExtended: true,
+        overdueResolved: isOverdue && totalPaymentsAfter >= interestAmount
       });
     } else {
       // If not fully paid, return the updated loan and payment details
@@ -1472,7 +1499,8 @@ app.post('/make-payment', authenticateToken, requireActiveShift, async (req, res
         loan: updatedLoanResult.rows[0],
         paymentHistory: paymentResult.rows[0],
         receiptPDF: receiptPDF, // Include receipt PDF in response
-        dueDateExtended: totalPaymentsAfter >= interestAmount
+        dueDateExtended: totalPaymentsAfter >= interestAmount,
+        overdueResolved: isOverdue && totalPaymentsAfter >= interestAmount
       });
     }
   } catch (err) {
