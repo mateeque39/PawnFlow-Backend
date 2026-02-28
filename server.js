@@ -5,6 +5,8 @@ const cors = require('cors');
 const { Pool } = require('pg');
 const validators = require('./validators');
 const { generateLoanPDF } = require('./pdf-invoice-generator');
+const { processPaymentWithCapitalization, extendDateByOneMonth } = require('./payment-utils');
+const { runMigrationOnStartup } = require('./migrate-on-startup');
 const nodemailer = require('nodemailer');
 const { initializeDatabase, isDatabaseInitialized } = require('./db-init');
 require('dotenv').config();
@@ -124,6 +126,15 @@ pool.query('SELECT NOW()', async (err, res) => {
       
       // Run migrations after schema initialization
       await runMigrations();
+
+      // Run automatic interest capitalization migration on startup
+      console.log('\n🔄 Running automatic interest capitalization check...');
+      const migrationResult = await runMigrationOnStartup(pool);
+      if (migrationResult.success) {
+        console.log(`✅ Auto-migration complete: ${migrationResult.message}`);
+      } else {
+        console.warn(`⚠️  Auto-migration warning: ${migrationResult.message}`);
+      }
       
       // Start HTTP server
       console.log('⚙️  Starting PawnFlow Server...');
@@ -1387,6 +1398,11 @@ app.post('/make-payment', authenticateToken, requireActiveShift, async (req, res
   const { loanId, paymentMethod, paymentAmount, userId } = req.body;
 
   try {
+    // Validate inputs
+    if (!loanId || !paymentAmount || parseFloat(paymentAmount) <= 0) {
+      return res.status(400).json({ message: 'Valid loan ID and payment amount required' });
+    }
+
     // Fetch the loan details
     const loanResult = await pool.query('SELECT * FROM loans WHERE id = $1', [loanId]);
     const loan = loanResult.rows[0];
@@ -1395,132 +1411,46 @@ app.post('/make-payment', authenticateToken, requireActiveShift, async (req, res
       return res.status(404).json({ message: 'Loan not found' });
     }
 
-    // Extract current loan values
-    const currentRemaining = parseFloat(loan.remaining_balance || 0);
-    const currentInterest = parseFloat(loan.interest_amount || 0);
-    const loanPrincipal = parseFloat(loan.loan_amount || 0);
-    const interestRate = parseFloat(loan.interest_rate || 2.5);
-    const currentStatus = loan.status?.toLowerCase() || 'active';
+    const payment = parseFloat(paymentAmount);
+    const method = paymentMethod || 'cash';
 
-    // Get total payments made so far
-    const paymentHistoryResult = await pool.query(
-      'SELECT SUM(payment_amount) as total_paid FROM payment_history WHERE loan_id = $1',
-      [loanId]
-    );
-    const totalPaid = parseFloat(paymentHistoryResult.rows[0].total_paid || 0);
-    const newTotalPaid = totalPaid + parseFloat(paymentAmount);
+    // Use the new interest capitalization payment processing
+    const paymentResult = processPaymentWithCapitalization(loan, payment, payment);
 
-    console.log(`\n💳 PAYMENT PROCESSING - Loan ${loanId}`);
-    console.log(`  Current status: ${currentStatus}`);
-    console.log(`  Current remaining: ${currentRemaining} (principal: ${loanPrincipal}, interest: ${currentInterest})`);
-    console.log(`  Payment amount: ${paymentAmount}`);
-    console.log(`  Interest rate: ${interestRate}%`);
+    console.log(`\n📊 PAYMENT RESULT:`);
+    console.log(`   New Principal: $${paymentResult.newPrincipal.toFixed(2)}`);
+    console.log(`   New Interest: $${paymentResult.newInterestAmount.toFixed(2)}`);
+    console.log(`   New Remaining Balance: $${paymentResult.finalRemainingBalance.toFixed(2)}`);
+    console.log(`   Interest Capitalized: ${paymentResult.interestCapitalized}`);
+    console.log(`   Due Date Extended: ${paymentResult.dueDateExtended}`);
+    console.log(`   New Due Date: ${paymentResult.newDueDate}`);
 
-    // Determine new status and values
-    let newStatus = currentStatus;
-    let newPrincipal = loanPrincipal;
-    let newInterest = currentInterest;
-    let newDueDate = loan.due_date;
-    let dueDateExtended = false;
-    const isOverdue = currentStatus === 'overdue';
-
-    // Calculate remaining balance after this payment
-    const remainingAfterPayment = Math.max(currentRemaining - parseFloat(paymentAmount), 0);
-    const isFullPayment = remainingAfterPayment === 0;
-
-    console.log(`  Remaining after payment: ${remainingAfterPayment}, Full payment: ${isFullPayment}`);
-
-    // If full interest payment (or more)
-    const paymentCoversInterest = newTotalPaid >= currentInterest;
-    
-    console.log(`  Total payments after this: ${newTotalPaid}, Current interest: ${currentInterest}`);
-    console.log(`  Payment covers interest: ${paymentCoversInterest}`);
-
-    // OVERDUE LOAN LOGIC - Partial Payment
-    if (isOverdue && !isFullPayment) {
-      // Partial payment on overdue loan:
-      // 1. Move from overdue to active
-      // 2. Extend due date by 1 month (from original due date)
-      // 3. Recalculate interest on REMAINING BALANCE AFTER PAYMENT
-      
-      newStatus = 'active';
-      
-      // Extend due date by 1 month (from loan's original due date)
-      const dueDate = new Date(loan.due_date);
-      const extended = new Date(dueDate);
-      extended.setMonth(extended.getMonth() + 1);
-      const year = extended.getFullYear();
-      const month = String(extended.getMonth() + 1).padStart(2, '0');
-      const day = String(extended.getDate()).padStart(2, '0');
-      newDueDate = `${year}-${month}-${day}`;
-      dueDateExtended = true;
-      
-      // After payment, remaining balance is reduced
-      const remainingAfterPayment = Math.max(remainingBalance - parseFloat(paymentAmount), 0);
-      
-      // Interest recalculation on REMAINING BALANCE (the reduced amount after payment)
-      newPrincipal = remainingAfterPayment;
-      newInterest = Math.round((remainingAfterPayment * interestRate / 100) * 100) / 100;
-      
-      console.log(`🔴 OVERDUE LOAN PARTIAL PAYMENT:`);
-      console.log(`   Status: overdue → active`);
-      console.log(`   Payment amount: $${paymentAmount}`);
-      console.log(`   Remaining before payment: $${remainingBalance}`);
-      console.log(`   Remaining after payment: $${remainingAfterPayment}`);
-      console.log(`   New interest (on remaining): $${newInterest}`);
-      console.log(`   New total remaining: $${remainingAfterPayment + newInterest}`);
-      console.log(`   Old due date: ${loan.due_date}`);
-      console.log(`   New due date: ${newDueDate}`);
-    }
-    // REGULAR PAYMENT (NON-OVERDUE LOAN) - Interest Paid
-    else if (paymentCoversInterest && !isOverdue) {
-      // Interest is paid! Now recalculate for next term
-
-      // Calculate new principal remaining after payment
-      // Principal remaining = Loan amount - (Total paid - old interest paid)
-      const principalPaid = newTotalPaid - currentInterest;
-      newPrincipal = Math.max(loanPrincipal - principalPaid, 0);
-
-      console.log(`  ✓ Interest paid! Principal paid so far: ${principalPaid}, Principal remaining: ${newPrincipal}`);
-
-      // Recalculate interest on remaining principal
-      newInterest = Math.round((newPrincipal * interestRate / 100) * 100) / 100;
-
-      // Extend due date by 1 month (from original due date)
-      const dueDate = new Date(loan.due_date);
-      const extended = new Date(dueDate);
-      extended.setMonth(extended.getMonth() + 1);
-      const year = extended.getFullYear();
-      const month = String(extended.getMonth() + 1).padStart(2, '0');
-      const day = String(extended.getDate()).padStart(2, '0');
-      newDueDate = `${year}-${month}-${day}`;
-      dueDateExtended = true;
-
-      console.log(`  ✓ New due date: ${newDueDate}`);
-      console.log(`  ✓ New interest: ${newInterest}`);
-    }
-
-    // Total remaining = principal + new interest
-    const newTotalRemaining = newPrincipal + newInterest;
-
-    console.log(`  📊 FINAL: remaining=${newTotalRemaining}, status=${newStatus}, interest=${newInterest}`);
-
-    // Update the loan
+    // Update the loan with new calculated values
     const updatedLoanResult = await pool.query(
       `UPDATE loans SET 
-        remaining_balance = $1, 
-        interest_amount = $2, 
-        due_date = $3, 
-        status = $4,
-        total_payable_amount = $5
-       WHERE id = $6 RETURNING *`,
-      [newTotalRemaining, newInterest, newDueDate, newStatus, newTotalRemaining, loanId]
+        loan_amount = $1,
+        remaining_balance = $2, 
+        interest_amount = $3, 
+        due_date = $4, 
+        status = $5,
+        total_payable_amount = $6,
+        updated_at = CURRENT_TIMESTAMP
+       WHERE id = $7 RETURNING *`,
+      [
+        paymentResult.newPrincipal,
+        paymentResult.finalRemainingBalance,
+        paymentResult.newInterestAmount,
+        paymentResult.newDueDate,
+        paymentResult.newStatus,
+        paymentResult.finalRemainingBalance,
+        loanId
+      ]
     );
 
     // Insert payment history
-    const paymentResult = await pool.query(
+    const paymentHistoryResult = await pool.query(
       'INSERT INTO payment_history (loan_id, payment_method, payment_amount, payment_date, created_by) VALUES ($1, $2, $3, CURRENT_TIMESTAMP, $4) RETURNING *',
-      [loanId, paymentMethod, paymentAmount, userId || null]
+      [loanId, method, payment, userId || null]
     );
 
     // Generate receipt PDF
@@ -1534,38 +1464,34 @@ app.post('/make-payment', authenticateToken, requireActiveShift, async (req, res
       console.warn('⚠️ PDF generation failed:', pdfError.message);
     }
 
-    // Response
-    if (newTotalRemaining === 0) {
-      res.status(200).json({
-        message: 'Loan fully paid off! Ready for redemption.',
-        loan: updatedLoanResult.rows[0],
-        paymentHistory: paymentResult.rows[0],
-        receiptPDF: receiptPDF,
-        dueDateExtended: dueDateExtended,
-        overdueResolved: isOverdue && newStatus === 'active'
-      });
-    } else {
-      let responseMessage = 'Payment successfully processed!';
-      if (isOverdue && newStatus === 'active') {
-        responseMessage = `✅ Partial payment received on overdue loan! Status changed from 'overdue' to 'active'. Due date extended to ${newDueDate}. Interest recalculated on remaining balance.`;
-      }
-      
-      res.status(200).json({
-        message: responseMessage,
-        loan: updatedLoanResult.rows[0],
-        paymentHistory: paymentResult.rows[0],
-        receiptPDF: receiptPDF,
-        dueDateExtended: dueDateExtended,
-        overdueResolved: isOverdue && newStatus === 'active',
-        overdueLoanDetails: isOverdue && newStatus === 'active' ? {
-          previousStatus: 'overdue',
-          newStatus: 'active',
-          remainingBalance: newTotalRemaining.toFixed(2),
-          newDueDate: newDueDate,
-          newInterestAmount: newInterest.toFixed(2)
-        } : null
-      });
+    // Build response based on result
+    let responseMessage = 'Payment successfully processed!';
+    
+    if (paymentResult.finalRemainingBalance === 0) {
+      responseMessage = '🎉 Loan fully paid off and automatically redeemed!';
+    } else if (paymentResult.interestCapitalized) {
+      responseMessage = `✅ Payment applied! Interest capitalized and added to principal. Due date extended to ${paymentResult.newDueDate}.`;
+    } else if (paymentResult.dueDateExtended && !paymentResult.interestCapitalized) {
+      responseMessage = `✅ Payment applied. Due date extended to ${paymentResult.newDueDate}.`;
     }
+
+    res.status(200).json({
+      message: responseMessage,
+      loan: updatedLoanResult.rows[0],
+      paymentHistory: paymentHistoryResult.rows[0],
+      receiptPDF: receiptPDF,
+      paymentDetails: {
+        paymentAmount: payment.toFixed(2),
+        interestCapitalized: paymentResult.interestCapitalized,
+        capitalizedAmount: paymentResult.interestCapitalized ? parseFloat(loan.interest_amount).toFixed(2) : null,
+        newPrincipal: paymentResult.newPrincipal.toFixed(2),
+        newInterestAmount: paymentResult.newInterestAmount.toFixed(2),
+        newRemainingBalance: paymentResult.finalRemainingBalance.toFixed(2),
+        dueDateExtended: paymentResult.dueDateExtended,
+        newDueDate: paymentResult.newDueDate,
+        newStatus: paymentResult.newStatus
+      }
+    });
   } catch (err) {
     console.error('❌ Error making payment:', err);
     res.status(500).json({ message: 'Error making payment', error: err.message });
@@ -3255,154 +3181,115 @@ app.post('/customers/:customerId/loans/:loanId/payment', authenticateToken, requ
       return res.status(404).json({ message: 'Loan not found for this customer' });
     }
 
-    // Get total payments made so far (including this one)
-    const paymentHistoryResult = await pool.query(
-      'SELECT SUM(payment_amount) as total_paid FROM payment_history WHERE loan_id = $1',
-      [loanIdNum]
-    );
-    const previouslyPaid = parseFloat(paymentHistoryResult.rows[0].total_paid || 0);
-    const totalPaymentsAfter = previouslyPaid + parseFloat(paymentAmount);
-
-    // Update remaining balance after payment
-    const newRemainingBalance = parseFloat(loan.remaining_balance) - parseFloat(paymentAmount);
-    const finalBalance = Math.max(newRemainingBalance, 0);
-
-    // If balance reaches 0, automatically redeem the loan
-    let newStatus = finalBalance === 0 ? 'redeemed' : loan.status;
-
-    // Check if we should extend the due date
-    let newDueDate = loan.due_date;
-    let newRemainingBalanceAfterInterest = finalBalance;
-    let newInterestAmount = parseFloat(loan.interest_amount || 0);
-    const interestRate = parseFloat(loan.interest_rate || 0);
-    
-    const isOverdue = loan.status === 'overdue';
-    const isFullPayment = finalBalance === 0;
-    
-    // OVERDUE LOAN LOGIC
-    if (isOverdue && !isFullPayment) {
-      // Partial payment on overdue loan:
-      // 1. Move from overdue to active
-      // 2. Extend due date by 1 month
-      // 3. Recalculate interest on REMAINING BALANCE AFTER PAYMENT
-      
-      newStatus = 'active';
-      
-      // Remaining after payment is deducted
-      const remainingAfterPayment = Math.max(finalBalance, 0);
-      
-      // Extend due date by 1 month (maintains same day of month)
-      const dueDate = new Date(loan.due_date);
-      const extended = new Date(dueDate);
-      extended.setMonth(extended.getMonth() + 1);
-      const year = extended.getFullYear();
-      const month = String(extended.getMonth() + 1).padStart(2, '0');
-      const day = String(extended.getDate()).padStart(2, '0');
-      newDueDate = `${year}-${month}-${day}`;
-      
-      // Calculate new interest on REMAINING BALANCE (the reduced amount after payment)
-      const newInterest = Math.round((remainingAfterPayment * interestRate / 100) * 100) / 100;
-      newRemainingBalanceAfterInterest = remainingAfterPayment + newInterest;
-      newInterestAmount = newInterest;
-      
-      console.log(`📅 OVERDUE LOAN HANDLING:`);
-      console.log(`   Loan ID: ${loanIdNum}`);
-      console.log(`   Status: overdue → active`);
-      console.log(`   Payment amount: $${paymentAmount.toFixed(2)}`);
-      console.log(`   Remaining before payment: $${parseFloat(loan.remaining_balance).toFixed(2)}`);
-      console.log(`   Remaining after payment: $${remainingAfterPayment.toFixed(2)}`);
-      console.log(`   New Interest (on remaining): $${newInterest.toFixed(2)}`);
-      console.log(`   New Remaining Balance: $${newRemainingBalanceAfterInterest.toFixed(2)}`);
-      console.log(`   Old Due Date: ${loan.due_date}`);
-      console.log(`   New Due Date: ${newDueDate}`);
-    } 
-    // REGULAR PAYMENT (NON-OVERDUE LOAN)
-    else if (totalPaymentsAfter >= interestAmount && !isOverdue) {
-      // If interest is paid on active/non-overdue loans, extend it by 30 days
-      const dueDate = new Date(loan.due_date);
-      const extended = new Date(dueDate);
-      extended.setDate(extended.getDate() + 30);
-      // Format date as YYYY-MM-DD string for PostgreSQL
-      const year = extended.getFullYear();
-      const month = String(extended.getMonth() + 1).padStart(2, '0');
-      const day = String(extended.getDate()).padStart(2, '0');
-      newDueDate = `${year}-${month}-${day}`;
-      console.log('📅 Due date extended automatically. Old:', dueDate, 'New:', newDueDate);
-    }
-
-    // Update the loan details with the new remaining balance, status, and due date if needed
-    const updatedLoanResult = await pool.query(
-      'UPDATE loans SET remaining_balance = $1, interest_amount = $2, status = $3, due_date = $4 WHERE id = $5 RETURNING *',
-      [newRemainingBalanceAfterInterest, newInterestAmount, newStatus, newDueDate, loanIdNum]
-    );
-
-    // Insert payment history with default payment method if not provided
+    const payment = parseFloat(paymentAmount);
     const method = paymentMethod || 'cash';
-    const paymentResult = await pool.query(
-      'INSERT INTO payment_history (loan_id, payment_method, payment_amount, payment_date, created_by) VALUES ($1, $2, $3, CURRENT_TIMESTAMP, $4) RETURNING *',
-      [loanIdNum, method, paymentAmount, userId || null]
+
+    // Use the new interest capitalization payment processing
+    const paymentResult = processPaymentWithCapitalization(loan, payment, payment);
+
+    console.log(`\n📊 PAYMENT RESULT FOR LOAN ${loanIdNum}:`);
+    console.log(`   New Principal: $${paymentResult.newPrincipal.toFixed(2)}`);
+    console.log(`   New Interest: $${paymentResult.newInterestAmount.toFixed(2)}`);
+    console.log(`   New Remaining Balance: $${paymentResult.finalRemainingBalance.toFixed(2)}`);
+    console.log(`   Interest Capitalized: ${paymentResult.interestCapitalized}`);
+    console.log(`   Due Date Extended: ${paymentResult.dueDateExtended}`);
+    console.log(`   New Due Date: ${paymentResult.newDueDate}`);
+
+    // Update the loan with new calculated values
+    const updatedLoanResult = await pool.query(
+      `UPDATE loans SET 
+        loan_amount = $1,
+        remaining_balance = $2, 
+        interest_amount = $3, 
+        due_date = $4, 
+        status = $5,
+        total_payable_amount = $6,
+        updated_at = CURRENT_TIMESTAMP
+       WHERE id = $7 RETURNING *`,
+      [
+        paymentResult.newPrincipal,
+        paymentResult.finalRemainingBalance,
+        paymentResult.newInterestAmount,
+        paymentResult.newDueDate,
+        paymentResult.newStatus,
+        paymentResult.finalRemainingBalance,
+        loanIdNum
+      ]
     );
 
-    // Generate receipt PDF with updated loan information (including new due date)
+    // Insert payment history
+    const paymentHistoryResult = await pool.query(
+      'INSERT INTO payment_history (loan_id, payment_method, payment_amount, payment_date, created_by) VALUES ($1, $2, $3, CURRENT_TIMESTAMP, $4) RETURNING *',
+      [loanIdNum, method, payment, userId || null]
+    );
+
+    // Generate receipt PDF
     let receiptPDF = null;
     try {
       const updatedLoan = updatedLoanResult.rows[0];
       const pdfBuffer = await generateLoanPDF(updatedLoan);
-      receiptPDF = pdfBuffer.toString('base64'); // Convert to base64 for JSON transport
-      console.log('✅ Receipt PDF generated successfully after payment for loan:', loanIdNum);
+      receiptPDF = pdfBuffer.toString('base64');
+      console.log('✅ Receipt PDF generated');
     } catch (pdfError) {
-      console.warn('⚠️ Warning: Could not generate receipt PDF after payment:', pdfError.message);
-      // Don't fail the payment if PDF generation fails
+      console.warn('⚠️ PDF generation failed:', pdfError.message);
     }
 
-    // Check if the loan was just fully paid (and auto-redeemed)
-    if (finalBalance <= 0) {
-      const loanWithInterest = {
-        ...updatedLoanResult.rows[0],
-        interest_amount: ensureInterestAmount(updatedLoanResult.rows[0])
-      };
-      res.status(200).json({
-        message: '🎉 Loan fully paid and automatically redeemed!',
-        loan: validators.formatLoanResponse(loanWithInterest),
-        paymentHistory: paymentResult.rows[0],
-        receiptPDF: receiptPDF, // Include receipt PDF in response
-        dueDateExtended: totalPaymentsAfter >= interestAmount
-      });
-    } else {
-      const loanWithInterest = {
-        ...updatedLoanResult.rows[0],
-        interest_amount: ensureInterestAmount(updatedLoanResult.rows[0])
-      };
-      
-      // Build appropriate response message based on what happened
-      let responseMessage = 'Payment successfully processed!';
-      let overdueLoanHandled = false;
-      
-      if (isOverdue && newStatus === 'active') {
-        responseMessage = `✅ Partial payment received on overdue loan! Status changed from 'overdue' to 'active'. Due date extended to ${newDueDate}. Interest recalculated on remaining balance.`;
-        overdueLoanHandled = true;
-      }
-      
+    // Build response based on result
+    let responseMessage = 'Payment successfully processed!';
+    
+    if (paymentResult.finalRemainingBalance === 0) {
+      responseMessage = '🎉 Loan fully paid off and automatically redeemed!';
+    } else if (paymentResult.interestCapitalized) {
+      responseMessage = `✅ Payment applied! Interest capitalized and added to principal. Due date extended to ${paymentResult.newDueDate}.`;
+    } else if (paymentResult.dueDateExtended && !paymentResult.interestCapitalized) {
+      responseMessage = `✅ Payment applied. Due date extended to ${paymentResult.newDueDate}.`;
+    }
+
+    const loanWithInterest = {
+      ...updatedLoanResult.rows[0],
+      interest_amount: ensureInterestAmount(updatedLoanResult.rows[0])
+    };
+
+    if (paymentResult.finalRemainingBalance === 0) {
       res.status(200).json({
         message: responseMessage,
         loan: validators.formatLoanResponse(loanWithInterest),
-        paymentHistory: paymentResult.rows[0],
-        receiptPDF: receiptPDF, // Include receipt PDF in response
-        dueDateExtended: totalPaymentsAfter >= interestAmount,
-        overdueLoanHandled: overdueLoanHandled,
-        details: isOverdue && newStatus === 'active' ? {
-          previousRemainingBalance: finalBalance.toFixed(2),
-          interestRate: `${interestRate}%`,
-          newInterestAmount: newInterestAmount.toFixed(2),
-          newRemainingBalance: newRemainingBalanceAfterInterest.toFixed(2),
-          newDueDate: newDueDate,
-          statusChange: 'overdue → active'
-        } : null
+        paymentHistory: paymentHistoryResult.rows[0],
+        receiptPDF: receiptPDF,
+        paymentDetails: {
+          paymentAmount: payment.toFixed(2),
+          interestCapitalized: paymentResult.interestCapitalized,
+          capitalizedAmount: paymentResult.interestCapitalized ? parseFloat(loan.interest_amount).toFixed(2) : null,
+          newPrincipal: paymentResult.newPrincipal.toFixed(2),
+          newInterestAmount: paymentResult.newInterestAmount.toFixed(2),
+          newRemainingBalance: paymentResult.finalRemainingBalance.toFixed(2),
+          dueDateExtended: paymentResult.dueDateExtended,
+          newDueDate: paymentResult.newDueDate,
+          newStatus: paymentResult.newStatus
+        }
+      });
+    } else {
+      res.status(200).json({
+        message: responseMessage,
+        loan: validators.formatLoanResponse(loanWithInterest),
+        paymentHistory: paymentHistoryResult.rows[0],
+        receiptPDF: receiptPDF,
+        paymentDetails: {
+          paymentAmount: payment.toFixed(2),
+          interestCapitalized: paymentResult.interestCapitalized,
+          capitalizedAmount: paymentResult.interestCapitalized ? parseFloat(loan.interest_amount).toFixed(2) : null,
+          newPrincipal: paymentResult.newPrincipal.toFixed(2),
+          newInterestAmount: paymentResult.newInterestAmount.toFixed(2),
+          newRemainingBalance: paymentResult.finalRemainingBalance.toFixed(2),
+          dueDateExtended: paymentResult.dueDateExtended,
+          newDueDate: paymentResult.newDueDate,
+          newStatus: paymentResult.newStatus
+        }
       });
     }
   } catch (err) {
     console.error('Error making payment:', err);
-    res.status(500).json({ message: 'Error making payment' });
+    res.status(500).json({ message: 'Error making payment', error: err.message });
   }
 });
 
