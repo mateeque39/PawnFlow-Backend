@@ -1388,7 +1388,7 @@ app.get('/search-loan', async (req, res) => {
       try {
         // Fetch payment history for this loan
         const paymentsResult = await pool.query(
-          'SELECT * FROM payments WHERE loan_id = $1 ORDER BY payment_date ASC',
+          'SELECT * FROM payment_history WHERE loan_id = $1 ORDER BY payment_date ASC',
           [loan.id]
         );
         
@@ -2091,7 +2091,7 @@ app.get('/loans/transaction/:transactionNumber', async (req, res) => {
     let calculatedState = null;
     try {
       const paymentsResult = await pool.query(
-        'SELECT * FROM payments WHERE loan_id = $1 ORDER BY payment_date ASC',
+        'SELECT * FROM payment_history WHERE loan_id = $1 ORDER BY payment_date ASC',
         [loan.id]
       );
       calculatedState = calculateLoanState(loan, paymentsResult.rows, new Date());
@@ -3208,7 +3208,7 @@ app.get('/customers/:customerId/loans', async (req, res) => {
       try {
         // Fetch payment history for this loan
         const paymentsResult = await pool.query(
-          'SELECT * FROM payments WHERE loan_id = $1 ORDER BY payment_date ASC',
+          'SELECT * FROM payment_historyhistory WHERE loan_id = $1 ORDER BY payment_date ASC',
           [loan.id]
         );
         
@@ -4103,7 +4103,7 @@ app.get('/api/loans', async (req, res) => {
       try {
         // Fetch payment history for this loan
         const paymentsResult = await pool.query(
-          'SELECT * FROM payments WHERE loan_id = $1 ORDER BY payment_date ASC',
+          'SELECT * FROM payment_history WHERE loan_id = $1 ORDER BY payment_date ASC',
           [loan.id]
         );
         
@@ -4213,7 +4213,7 @@ app.get('/test-calculation/:loanId', async (req, res) => {
     
     // Get payments
     const paymentResult = await pool.query(
-      'SELECT * FROM payments WHERE loan_id = $1 ORDER BY payment_date ASC',
+      'SELECT * FROM payment_history WHERE loan_id = $1 ORDER BY payment_date ASC',
       [loanId]
     );
     const payments = paymentResult.rows;
@@ -4272,6 +4272,100 @@ app.get('/test-calculation/:loanId', async (req, res) => {
     console.error('❌ TEST-CALC: Error:', err.message);
     res.status(500).json({ 
       message: 'Test failed', 
+      error: err.message 
+    });
+  }
+});
+
+// ===== FIX ENDPOINT - Correct Loan #8 data =====
+app.get('/fix-loan-8', async (req, res) => {
+  try {
+    console.log(`\n🔧 FIX-LOAN-8: Starting fix...\n`);
+    
+    // Step 1: Fix loan_amount from $20,600 to $20,000
+    console.log('🔧 Step 1: Correcting loan_amount from $20,600 to $20,000');
+    const updateResult = await pool.query(
+      `UPDATE loans 
+       SET loan_amount = 20000, 
+           initial_loan_amount = COALESCE(initial_loan_amount, 20000),
+           remaining_balance = 20000,
+           interest_amount = 600
+       WHERE id = 8`,
+    );
+    console.log(`✅ Updated: ${updateResult.rowCount} loan record(s)\n`);
+    
+    // Step 2: Add missing payment
+    console.log('🔧 Step 2: Adding missing $600 payment from 06/02/2026 23:46:01');
+    const checkPayment = await pool.query(
+      `SELECT * FROM payment_history WHERE loan_id = 8 AND DATE(payment_date) = '2026-06-02'`
+    );
+    
+    if (checkPayment.rows.length > 0) {
+      console.log(`⚠️  Payment already exists - skipping insert`);
+      console.log(`   Existing: ${JSON.stringify(checkPayment.rows[0], null, 2)}`);
+    } else {
+      const insertResult = await pool.query(
+        `INSERT INTO payment_history (loan_id, payment_amount, payment_date, payment_method, created_at)
+         VALUES (8, 600, '2026-06-02 23:46:01', 'cash', NOW())
+         RETURNING *`,
+      );
+      console.log(`✅ Payment added:`);
+      console.log(`   ID: ${insertResult.rows[0].id}`);
+      console.log(`   Amount: $${insertResult.rows[0].payment_amount}`);
+      console.log(`   Date: ${insertResult.rows[0].payment_date}\n`);
+    }
+    
+    // Step 3: Get recalculated state
+    console.log('🔧 Step 3: Verifying fix with recalculation...\n');
+    const testCalc = await pool.query('SELECT * FROM loans WHERE id = 8');
+    const testPayments = await pool.query(
+      'SELECT * FROM payment_history WHERE loan_id = 8 ORDER BY payment_date ASC'
+    );
+    
+    const dbLoan = testCalc.rows[0];
+    const payments = testPayments.rows;
+    const calculated = calculateLoanState(dbLoan, payments, new Date());
+    
+    console.log('📊 Final Result:');
+    console.log(`   Loan Amount: $${dbLoan.loan_amount}`);
+    console.log(`   Interest Rate: ${dbLoan.interest_rate}%`);
+    console.log(`   Payments: ${payments.length}`);
+    if (payments.length > 0) {
+      payments.forEach((p, i) => {
+        console.log(`     ${i+1}. ${p.payment_date}: $${p.payment_amount}`);
+      });
+    }
+    console.log(`   Calculated Principal: $${calculated.principalRemaining.toFixed(2)}`);
+    console.log(`   Calculated Interest: $${calculated.interestAccrued.toFixed(2)}`);
+    console.log(`   Calculated Total: $${calculated.totalBalance.toFixed(2)}\n`);
+    
+    res.json({
+      status: 'SUCCESS',
+      message: 'Loan #8 has been fixed',
+      fixes_applied: {
+        loan_amount_corrected: {
+          from: 20600,
+          to: 20000
+        },
+        payment_added: {
+          amount: 600,
+          date: '2026-06-02 23:46:01'
+        }
+      },
+      after_fix: {
+        loan_amount: dbLoan.loan_amount,
+        interest_rate: dbLoan.interest_rate,
+        calculated_balance: parseFloat(calculated.totalBalance.toFixed(2)),
+        calculated_principal: parseFloat(calculated.principalRemaining.toFixed(2)),
+        calculated_interest: parseFloat(calculated.interestAccrued.toFixed(2)),
+        payments_count: payments.length
+      }
+    });
+  } catch (err) {
+    console.error('❌ FIX-LOAN-8: Error:', err.message);
+    res.status(500).json({ 
+      status: 'ERROR',
+      message: 'Failed to fix loan', 
       error: err.message 
     });
   }
