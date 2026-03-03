@@ -4107,8 +4107,12 @@ app.get('/api/loans', async (req, res) => {
           [loan.id]
         );
         
+        console.log(`[CALC-DEBUG] Loan ${loan.id}: Input = { amount: ${loan.loan_amount}, rate: ${loan.interest_rate}%, due: ${loan.due_date}, payments: ${paymentsResult.rows.length} }`);
+        
         // Calculate loan state dynamically
         const loanState = calculateLoanState(loan, paymentsResult.rows, new Date());
+        
+        console.log(`[CALC-SUCCESS] Loan ${loan.id}: Calculated balance = $${loanState.totalBalance.toFixed(2)} (DB value was $${loan.remaining_balance})`);
         
         // Determine if loan should be filtered out from overdue calculation
         const isClosedStatus = ['PAID', 'CLOSED', 'paid', 'closed'].includes(loan.status);
@@ -4131,7 +4135,9 @@ app.get('/api/loans', async (req, res) => {
           calculated_state: loanState
         };
       } catch (calcErr) {
-        console.warn(`Could not calculate state for loan ${loan.id}:`, calcErr.message);
+        console.error(`[CALC-ERROR] Loan ${loan.id} FAILED:`, calcErr.message);
+        console.error(`[CALC-ERROR] Stack:`, calcErr.stack);
+        console.error(`[CALC-ERROR] Loan input was:`, JSON.stringify(loan, null, 2).substring(0, 500));
         
         const isClosedStatus = ['PAID', 'CLOSED', 'paid', 'closed'].includes(loan.status);
         const hasDueDate = loan.due_date && !isNaN(new Date(loan.due_date).getTime());
