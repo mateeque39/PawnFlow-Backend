@@ -7,6 +7,7 @@ const validators = require('./validators');
 const { generateLoanPDF } = require('./pdf-invoice-generator');
 const { processPaymentWithCapitalization, extendDateByOneMonth } = require('./payment-utils');
 const { runMigrationOnStartup } = require('./migrate-on-startup');
+const { calculateLoanState } = require('./loan-calculator');
 const nodemailer = require('nodemailer');
 const { initializeDatabase, isDatabaseInitialized } = require('./db-init');
 require('dotenv').config();
@@ -1497,6 +1498,125 @@ app.post('/make-payment', authenticateToken, requireActiveShift, async (req, res
     res.status(500).json({ message: 'Error making payment', error: err.message });
   }
 });
+
+// ======================== LOAN STATE CALCULATION ========================
+
+/**
+ * Calculate Loan State - POST /api/loans/calculate-state
+ * 
+ * Calculates dynamic loan state based on:
+ * - Original loan data
+ * - Payment history
+ * - Current date
+ */
+app.post('/api/loans/calculate-state', async (req, res) => {
+  try {
+    const { loan, payments = [], currentDate } = req.body;
+
+    if (!loan) {
+      return res.status(400).json({ 
+        message: 'loan object is required in request body' 
+      });
+    }
+
+    if (!loan.loan_amount || loan.interest_rate === undefined) {
+      return res.status(400).json({ 
+        message: 'loan must contain loan_amount and interest_rate' 
+      });
+    }
+
+    if (!loan.created_at && !loan.issued_date) {
+      return res.status(400).json({ 
+        message: 'loan must contain either created_at or issued_date' 
+      });
+    }
+
+    if (!loan.due_date) {
+      return res.status(400).json({ 
+        message: 'loan must contain due_date' 
+      });
+    }
+
+    // Calculate loan state
+    const loanState = calculateLoanState(
+      loan,
+      payments,
+      currentDate ? new Date(currentDate) : new Date()
+    );
+
+    res.json(loanState);
+  } catch (err) {
+    console.error('❌ Error calculating loan state:', err);
+    res.status(400).json({ 
+      message: 'Error calculating loan state',
+      error: err.message 
+    });
+  }
+});
+
+/**
+ * Get Loan State - GET /api/loans/:loanId/calculate-state
+ * 
+ * Fetches loan and payment history from database and calculates state
+ */
+app.get('/api/loans/:loanId/calculate-state', async (req, res) => {
+  try {
+    const { loanId } = req.params;
+    const { currentDate } = req.query;
+
+    const loanIdNum = parseInt(loanId, 10);
+    if (isNaN(loanIdNum)) {
+      return res.status(400).json({ message: 'Invalid loan ID' });
+    }
+
+    // Fetch loan from database
+    const loanResult = await pool.query(
+      'SELECT * FROM loans WHERE id = $1',
+      [loanIdNum]
+    );
+
+    if (loanResult.rows.length === 0) {
+      return res.status(404).json({ message: 'Loan not found' });
+    }
+
+    const loan = loanResult.rows[0];
+
+    // Fetch payment history for this loan
+    const paymentsResult = await pool.query(
+      'SELECT payment_amount, payment_date FROM payment_history WHERE loan_id = $1 ORDER BY payment_date ASC',
+      [loanIdNum]
+    );
+
+    // Calculate loan state
+    const loanState = calculateLoanState(
+      loan,
+      paymentsResult.rows,
+      currentDate ? new Date(currentDate) : new Date()
+    );
+
+    res.json({
+      loan: {
+        id: loan.id,
+        transaction_number: loan.transaction_number,
+        customer_name: loan.customer_name,
+        loan_amount: loan.loan_amount,
+        interest_rate: loan.interest_rate,
+        created_at: loan.created_at,
+        due_date: loan.due_date,
+        status: loan.status
+      },
+      state: loanState
+    });
+  } catch (err) {
+    console.error('❌ Error calculating loan state:', err);
+    res.status(500).json({ 
+      message: 'Error calculating loan state',
+      error: err.message 
+    });
+  }
+});
+
+// ======================== END LOAN STATE CALCULATION ========================
 
 // Debug endpoint to check loan details
 app.get('/debug/loan/:loanId', async (req, res) => {
