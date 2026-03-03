@@ -4305,8 +4305,8 @@ app.get('/fix-loan-8', async (req, res) => {
       console.log(`   Existing: ${JSON.stringify(checkPayment.rows[0], null, 2)}`);
     } else {
       const insertResult = await pool.query(
-        `INSERT INTO payment_history (loan_id, payment_amount, payment_date, payment_method, created_at)
-         VALUES (8, 600, '2026-06-02 23:46:01', 'cash', NOW())
+        `INSERT INTO payment_history (loan_id, payment_amount, payment_date, payment_method, created_by)
+         VALUES (8, 600, '2026-06-02 23:46:01', 'cash', 'system')
          RETURNING *`,
       );
       console.log(`✅ Payment added:`);
