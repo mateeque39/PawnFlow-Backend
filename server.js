@@ -141,15 +141,23 @@ pool.query('SELECT NOW()', async (err, res) => {
         let deleteCount = 0;
         
         for (const loan of allLoans.rows) {
-          // Calculate correct values for every loan
-          const principal = parseFloat(loan.loan_amount || loan.initial_loan_amount || 0);
+          // Use initial_loan_amount as source of truth (correct principal)
+          // If both are corrupted the same, use loan_amount; otherwise prefer initial_loan_amount
+          const principal = parseFloat(loan.initial_loan_amount || loan.loan_amount || 0);
           const rate = parseFloat(loan.interest_rate || 0);
           const term = parseInt(loan.loan_term || 30);
+          
+          // Get total payments made so far for accurate remaining balance
+          const paymentsResult = await pool.query(
+            'SELECT SUM(payment_amount) AS total_paid FROM payment_history WHERE loan_id = $1',
+            [loan.id]
+          );
+          const totalPaid = parseFloat(paymentsResult.rows[0].total_paid || 0);
           
           // Correct calculations
           const correctInterestAmount = (principal * rate) / 100;
           const correctTotalPayable = principal + correctInterestAmount;
-          const correctRemainingBalance = principal + correctInterestAmount;
+          const correctRemainingBalance = correctTotalPayable - totalPaid;
           
           // Calculate correct due date
           let correctDueDate = null;
@@ -161,24 +169,25 @@ pool.query('SELECT NOW()', async (err, res) => {
           
           console.log(`📊 Loan #${loan.id}:`);
           console.log(`   Principal: $${principal.toFixed(2)} | Interest (${rate}%): $${correctInterestAmount.toFixed(2)}`);
-          console.log(`   Total Payable: $${correctTotalPayable.toFixed(2)} | Due: ${correctDueDate}`);
+          console.log(`   Total Payable: $${correctTotalPayable.toFixed(2)} | Remaining: $${correctRemainingBalance.toFixed(2)} | Due: ${correctDueDate}`);
           
           // Update ALL fields with correct calculated values
+          // CRITICAL: Do NOT use COALESCE - directly set the values
           await pool.query(
             `UPDATE loans 
-             SET interest_amount = $1, 
-                 total_payable_amount = $2, 
-                 remaining_balance = $3,
-                 due_date = $4,
-                 loan_amount = COALESCE(loan_amount, $5),
-                 initial_loan_amount = COALESCE(initial_loan_amount, $5)
+             SET loan_amount = $1,
+                 initial_loan_amount = $1,
+                 interest_amount = $2, 
+                 total_payable_amount = $3, 
+                 remaining_balance = $4,
+                 due_date = $5
              WHERE id = $6`,
             [
+              principal,
               correctInterestAmount,
               correctTotalPayable,
               correctRemainingBalance,
               correctDueDate,
-              principal,
               loan.id
             ]
           );
