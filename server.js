@@ -1380,10 +1380,40 @@ app.get('/search-loan', async (req, res) => {
       return res.status(404).json({ message: 'No loans found' });
     }
 
-    // Format response with snake_case fields and add PDF links
-    const formattedLoans = result.rows.map(loan => ({
-      ...validators.formatLoanResponse(loan),
-      pdf_url: `/loan-pdf/${loan.id}`
+    // Format response with snake_case fields, add PDF links, and calculate dynamic state
+    const formattedLoans = await Promise.all(result.rows.map(async (loan) => {
+      try {
+        // Fetch payment history for this loan
+        const paymentsResult = await pool.query(
+          'SELECT * FROM payments WHERE loan_id = $1 ORDER BY payment_date ASC',
+          [loan.id]
+        );
+        
+        // Calculate loan state dynamically
+        const loanState = calculateLoanState(loan, paymentsResult.rows, new Date());
+        
+        // Return formatted loan with calculated values
+        return {
+          ...validators.formatLoanResponse(loan),
+          pdf_url: `/loan-pdf/${loan.id}`,
+          // Override static values with calculated values
+          remaining_balance: loanState.totalBalance,
+          principal_remaining: loanState.principalRemaining,
+          interest_accrued: loanState.interestAccrued,
+          penalty_accrued: loanState.penaltyAccrued,
+          due_date: loanState.nextDueDate,
+          is_overdue: loanState.isOverdue,
+          days_overdue: loanState.daysOverdue,
+          calculated_state: loanState // Include full calculation if needed
+        };
+      } catch (calcErr) {
+        console.warn(`Could not calculate state for loan ${loan.id}:`, calcErr.message);
+        // Return loan with original values if calculation fails
+        return {
+          ...validators.formatLoanResponse(loan),
+          pdf_url: `/loan-pdf/${loan.id}`
+        };
+      }
     }));
 
     res.json(formattedLoans);
@@ -2054,6 +2084,23 @@ app.get('/loans/transaction/:transactionNumber', async (req, res) => {
 
     const loan = loanResult.rows[0];
 
+    // Fetch payment history and calculate current state
+    let calculatedState = null;
+    try {
+      const paymentsResult = await pool.query(
+        'SELECT * FROM payments WHERE loan_id = $1 ORDER BY payment_date ASC',
+        [loan.id]
+      );
+      calculatedState = calculateLoanState(loan, paymentsResult.rows, new Date());
+    } catch (calcErr) {
+      console.warn(`Could not calculate state for loan ${loan.id}:`, calcErr.message);
+    }
+
+    // Use calculated values if available, otherwise use database values
+    const remainingBalance = calculatedState ? calculatedState.totalBalance : loan.remaining_balance;
+    const dueDate = calculatedState ? calculatedState.nextDueDate : loan.due_date;
+    const interestAmount = calculatedState ? calculatedState.interestAccrued : loan.interest_amount;
+
     res.json({
       id: loan.id,
       transactionNumber: loan.transaction_number,
@@ -2073,13 +2120,14 @@ app.get('/loans/transaction/:transactionNumber', async (req, res) => {
       loanDetails: {
         loanAmount: loan.loan_amount,
         interestRate: loan.interest_rate,
-        interestAmount: loan.interest_amount,
+        interestAmount: interestAmount,  // ✅ Calculated
         totalPayableAmount: loan.total_payable_amount,
-        remainingBalance: loan.remaining_balance,
+        remainingBalance: remainingBalance,  // ✅ Calculated
         status: loan.status,
-        dueDate: loan.due_date,
+        dueDate: dueDate,  // ✅ Calculated/Extended
         loanIssuedDate: loan.loan_issued_date
-      }
+      },
+      calculatedState: calculatedState  // Include full calculation for debugging
     });
   } catch (err) {
     console.error('Error retrieving customer data:', err);
@@ -3153,17 +3201,47 @@ app.get('/customers/:customerId/loans', async (req, res) => {
     };
 
     // Group loans by status AND by overdue status for active loans
-    const loans = result.rows.map(loan => {
-      const overdueInfo = computeOverdueInfo(loan);
-      const formatted = {
-        ...validators.formatLoanResponse(loan),
-        pdf_url: `/loan-pdf/${loan.id}`,
-        isOverdue: overdueInfo.isOverdue,
-        daysOverdue: overdueInfo.daysOverdue
-      };
-      console.log(`📊 Loan ${loan.id}: status='${loan.status}' (type: ${typeof loan.status}), formatted.status='${formatted.status}', isOverdue=${formatted.isOverdue}`);
-      return formatted;
-    });
+    const loans = await Promise.all(result.rows.map(async (loan) => {
+      try {
+        // Fetch payment history for this loan
+        const paymentsResult = await pool.query(
+          'SELECT * FROM payments WHERE loan_id = $1 ORDER BY payment_date ASC',
+          [loan.id]
+        );
+        
+        // Calculate loan state dynamically
+        const loanState = calculateLoanState(loan, paymentsResult.rows, new Date());
+        
+        const overdueInfo = computeOverdueInfo(loan);
+        const formatted = {
+          ...validators.formatLoanResponse(loan),
+          pdf_url: `/loan-pdf/${loan.id}`,
+          isOverdue: overdueInfo.isOverdue,
+          daysOverdue: overdueInfo.daysOverdue,
+          // Override static values with calculated values
+          remaining_balance: loanState.totalBalance,
+          principal_remaining: loanState.principalRemaining,
+          interest_accrued: loanState.interestAccrued,
+          penalty_accrued: loanState.penaltyAccrued,
+          due_date: loanState.nextDueDate,
+          is_overdue: loanState.isOverdue,
+          days_overdue: loanState.daysOverdue,
+          calculated_state: loanState
+        };
+        console.log(`📊 Loan ${loan.id}: status='${loan.status}' (type: ${typeof loan.status}), formatted.status='${formatted.status}', isOverdue=${formatted.isOverdue}, calculated_balance=${loanState.totalBalance}`);
+        return formatted;
+      } catch (calcErr) {
+        console.warn(`Could not calculate state for loan ${loan.id}:`, calcErr.message);
+        const overdueInfo = computeOverdueInfo(loan);
+        const formatted = {
+          ...validators.formatLoanResponse(loan),
+          pdf_url: `/loan-pdf/${loan.id}`,
+          isOverdue: overdueInfo.isOverdue,
+          daysOverdue: overdueInfo.daysOverdue
+        };
+        return formatted;
+      }
+    }));
 
     // Categorize loans - PRIORITIZe database status field
     const activeLoans = loans.filter(l => {
@@ -3257,9 +3335,37 @@ app.get('/customers/:customerId/loans/search', async (req, res) => {
       return res.status(404).json({ message: 'No loans found for this customer matching criteria' });
     }
 
-    const loans = result.rows.map(loan => ({
-      ...validators.formatLoanResponse(loan),
-      pdf_url: `/loan-pdf/${loan.id}`
+    const loans = await Promise.all(result.rows.map(async (loan) => {
+      try {
+        // Fetch payment history for this loan
+        const paymentsResult = await pool.query(
+          'SELECT * FROM payments WHERE loan_id = $1 ORDER BY payment_date ASC',
+          [loan.id]
+        );
+        
+        // Calculate loan state dynamically
+        const loanState = calculateLoanState(loan, paymentsResult.rows, new Date());
+        
+        return {
+          ...validators.formatLoanResponse(loan),
+          pdf_url: `/loan-pdf/${loan.id}`,
+          // Override static values with calculated values
+          remaining_balance: loanState.totalBalance,
+          principal_remaining: loanState.principalRemaining,
+          interest_accrued: loanState.interestAccrued,
+          penalty_accrued: loanState.penaltyAccrued,
+          due_date: loanState.nextDueDate,
+          is_overdue: loanState.isOverdue,
+          days_overdue: loanState.daysOverdue,
+          calculated_state: loanState
+        };
+      } catch (calcErr) {
+        console.warn(`Could not calculate state for loan ${loan.id}:`, calcErr.message);
+        return {
+          ...validators.formatLoanResponse(loan),
+          pdf_url: `/loan-pdf/${loan.id}`
+        };
+      }
     }));
 
     res.json(loans);
