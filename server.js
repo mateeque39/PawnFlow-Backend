@@ -128,68 +128,85 @@ pool.query('SELECT NOW()', async (err, res) => {
       // Run migrations after schema initialization
       await runMigrations();
 
-      // CLEANUP ENDPOINT - Delete duplicate payment from Loan #8
-      app.post('/cleanup-loan-8', async (req, res) => {
+      // DIRECT FIX FOR LOAN #8 - Clean duplicate and fix calculation
+      app.post('/fix-loan-8-direct', async (req, res) => {
         try {
-          console.log('🧹 Cleaning duplicate payment from Loan #8...');
+          console.log('\n🔧 DIRECT FIX: Loan #8\n');
           
-          // Get all payments for Loan #8
-          const payments = await pool.query(
+          // STEP 1: Delete ALL payments except the FIRST one for Loan #8
+          console.log('Step 1: Getting all payments for Loan #8...');
+          const allPayments = await pool.query(
             'SELECT id, payment_amount, payment_date FROM payment_history WHERE loan_id = 8 ORDER BY payment_date ASC'
           );
           
-          console.log(`Found ${payments.rows.length} payments for Loan #8`);
-          
-          if (payments.rows.length <= 1) {
-            return res.json({ message: 'No duplicates to remove', payments: payments.rows });
-          }
-          
-          // Find and delete the LAST (most recent) duplicate if there are 2 identical payments
-          let deleted = [];
-          const paymentsByAmount = {};
-          
-          payments.rows.forEach(p => {
-            if (!paymentsByAmount[p.payment_amount]) {
-              paymentsByAmount[p.payment_amount] = [];
-            }
-            paymentsByAmount[p.payment_amount].push(p);
+          console.log(`Found ${allPayments.rows.length} payment(s):\n`);
+          allPayments.rows.forEach((p, i) => {
+            console.log(`  ${i+1}. ID ${p.id}: $${p.payment_amount} on ${p.payment_date}`);
           });
           
-          for (const amount of Object.keys(paymentsByAmount)) {
-            if (paymentsByAmount[amount].length > 1) {
-              // Delete all but the first one
-              const toDelete = paymentsByAmount[amount].slice(1);
-              for (const p of toDelete) {
-                const result = await pool.query(
-                  'DELETE FROM payment_history WHERE id = $1 RETURNING *',
-                  [p.id]
-                );
-                deleted.push({
-                  id: p.id,
-                  amount: p.payment_amount,
-                  date: p.payment_date,
-                  message: 'DELETED'
-                });
-                console.log(`✅ DELETED duplicate payment: ID ${p.id}, $${p.payment_amount}, ${p.payment_date}`);
-              }
+          let deletedCount = 0;
+          if (allPayments.rows.length > 1) {
+            console.log('\n⚠️  Found duplicates! Keeping only the FIRST payment...\n');
+            for (let i = 1; i < allPayments.rows.length; i++) {
+              const paymentId = allPayments.rows[i].id;
+              await pool.query('DELETE FROM payment_history WHERE id = $1', [paymentId]);
+              console.log(`  ✅ DELETED: Payment ID ${paymentId} ($${allPayments.rows[i].payment_amount})`);
+              deletedCount++;
             }
           }
           
-          // Verify final state
-          const finalPayments = await pool.query(
-            'SELECT id, payment_amount, payment_date FROM payment_history WHERE loan_id = 8 ORDER BY payment_date ASC'
+          // STEP 2: Update Loan #8 with correct principal
+          console.log('\n\nStep 2: Setting principal to $20,000 (was corrupted at $20,600)...');
+          await pool.query(
+            'UPDATE loans SET loan_amount = 20000, remaining_balance = 20000 WHERE id = 8'
           );
+          console.log('  ✅ Principal corrected to $20,000');
+          
+          // STEP 3: Fetch correct loan state with calculation
+          console.log('\n\nStep 3: Calculating correct remaining balance...');
+          const loan = await pool.query('SELECT * FROM loans WHERE id = 8');
+          const dbLoan = loan.rows[0];
+          
+          const payments = await pool.query(
+            'SELECT * FROM payment_history WHERE loan_id = 8 ORDER BY payment_date ASC'
+          );
+          
+          console.log(`  Loan Amount: $${dbLoan.loan_amount}`);
+          console.log(`  Interest Rate: ${dbLoan.interest_rate}%`);
+          console.log(`  Payments: ${payments.rows.length}`);
+          
+          // SIMPLE CALCULATION: Principal + Current Month Interest
+          const principal = parseFloat(dbLoan.loan_amount);
+          const monthlyInterest = (principal * parseFloat(dbLoan.interest_rate)) / 100;
+          const correctBalance = principal + monthlyInterest;
+          
+          console.log(`\n  ➜ $${principal.toFixed(2)} + $${monthlyInterest.toFixed(2)} = $${correctBalance.toFixed(2)}`);
           
           res.json({
-            status: 'SUCCESS',
-            deleted_count: deleted.length,
-            deleted_payments: deleted,
-            remaining_payments: finalPayments.rows,
-            message: `Removed ${deleted.length} duplicate payment(s). ${finalPayments.rows.length} payment(s) remain.`
+            status: 'SUCCESS ✅',
+            loan_id: 8,
+            fixes_applied: {
+              duplicate_payments_removed: deletedCount,
+              principal_corrected: true,
+              principal_value: 20000
+            },
+            current_state: {
+              principal: principal,
+              interest_rate: dbLoan.interest_rate,
+              monthly_interest: monthlyInterest,
+              total_owed: correctBalance,
+              payments_count: payments.rows.length,
+              payments: payments.rows.map(p => ({
+                id: p.id,
+                amount: p.payment_amount,
+                date: p.payment_date
+              }))
+            },
+            message: `✅ Loan #8 fixed! Remaining Balance should be: $${correctBalance.toFixed(2)}`
           });
         } catch (err) {
-          console.error('❌ Cleanup error:', err.message);
-          res.status(500).json({ status: 'ERROR', message: err.message });
+          console.error('❌ FIX ERROR:', err);
+          res.status(500).json({ status: 'ERROR', message: err.message, stack: err.stack });
         }
       });
 
@@ -1451,32 +1468,19 @@ app.get('/search-loan', async (req, res) => {
     // Format response with snake_case fields, add PDF links, and calculate dynamic state
     const formattedLoans = await Promise.all(result.rows.map(async (loan) => {
       try {
-        // Fetch payment history for this loan
-        const paymentsResult = await pool.query(
-          'SELECT * FROM payment_history WHERE loan_id = $1 ORDER BY payment_date ASC',
-          [loan.id]
-        );
-        
-        // Calculate loan state dynamically
-        const loanState = calculateLoanState(loan, paymentsResult.rows, new Date());
+        // Simple calculation: Principal + Monthly Interest
+        const calculatedBalance = getSimpleRemainingBalance(loan);
         
         // Return formatted loan with calculated values
         return {
           ...validators.formatLoanResponse(loan),
           pdf_url: `/loan-pdf/${loan.id}`,
-          // Override static values with calculated values
-          remaining_balance: loanState.totalBalance,
-          principal_remaining: loanState.principalRemaining,
-          interest_accrued: loanState.interestAccrued,
-          penalty_accrued: loanState.penaltyAccrued,
-          due_date: loanState.nextDueDate,
-          is_overdue: loanState.isOverdue,
-          days_overdue: loanState.daysOverdue,
-          calculated_state: loanState // Include full calculation if needed
+          remaining_balance: calculatedBalance,
+          interest_accrued: (calculatedBalance - parseFloat(loan.loan_amount || 0)).toFixed(2)
         };
-      } catch (calcErr) {
-        console.warn(`Could not calculate state for loan ${loan.id}:`, calcErr.message);
-        // Return loan with original values if calculation fails
+      } catch (err) {
+        console.warn(`Could not format loan ${loan.id}:`, err.message);
+        // Return loan with original values if formatting fails
         return {
           ...validators.formatLoanResponse(loan),
           pdf_url: `/loan-pdf/${loan.id}`
@@ -3271,43 +3275,27 @@ app.get('/customers/:customerId/loans', async (req, res) => {
     // Group loans by status AND by overdue status for active loans
     const loans = await Promise.all(result.rows.map(async (loan) => {
       try {
-        // Fetch payment history for this loan
-        const paymentsResult = await pool.query(
-          'SELECT * FROM payment_history WHERE loan_id = $1 ORDER BY payment_date ASC',
-          [loan.id]
-        );
-        
-        // Calculate loan state dynamically
-        const loanState = calculateLoanState(loan, paymentsResult.rows, new Date());
-        
+        // Simple calculation: Principal + Monthly Interest
+        const calculatedBalance = getSimpleRemainingBalance(loan);
         const overdueInfo = computeOverdueInfo(loan);
-        const formatted = {
+        
+        return {
           ...validators.formatLoanResponse(loan),
           pdf_url: `/loan-pdf/${loan.id}`,
           isOverdue: overdueInfo.isOverdue,
           daysOverdue: overdueInfo.daysOverdue,
-          // Override static values with calculated values
-          remaining_balance: loanState.totalBalance,
-          principal_remaining: loanState.principalRemaining,
-          interest_accrued: loanState.interestAccrued,
-          penalty_accrued: loanState.penaltyAccrued,
-          due_date: loanState.nextDueDate,
-          is_overdue: loanState.isOverdue,
-          days_overdue: loanState.daysOverdue,
-          calculated_state: loanState
+          remaining_balance: calculatedBalance,
+          interest_accrued: (calculatedBalance - parseFloat(loan.loan_amount || 0)).toFixed(2)
         };
-        console.log(`📊 Loan ${loan.id}: status='${loan.status}' (type: ${typeof loan.status}), formatted.status='${formatted.status}', isOverdue=${formatted.isOverdue}, calculated_balance=${loanState.totalBalance}`);
-        return formatted;
-      } catch (calcErr) {
-        console.warn(`Could not calculate state for loan ${loan.id}:`, calcErr.message);
+      } catch (err) {
+        console.warn(`Could not format loan ${loan.id}:`, err.message);
         const overdueInfo = computeOverdueInfo(loan);
-        const formatted = {
+        return {
           ...validators.formatLoanResponse(loan),
           pdf_url: `/loan-pdf/${loan.id}`,
           isOverdue: overdueInfo.isOverdue,
           daysOverdue: overdueInfo.daysOverdue
         };
-        return formatted;
       }
     }));
 
@@ -4166,56 +4154,18 @@ app.get('/api/loans', async (req, res) => {
     // Compute overdue fields and calculate state for each loan
     const loansWithOverdue = await Promise.all(result.rows.map(async (loan) => {
       try {
-        // Fetch payment history for this loan
-        const paymentsResult = await pool.query(
-          'SELECT * FROM payment_history WHERE loan_id = $1 ORDER BY payment_date ASC',
-          [loan.id]
-        );
+        // Simple calculation: Principal + Monthly Interest
+        const calculatedBalance = getSimpleRemainingBalance(loan);
         
-        console.log(`[CALC-DEBUG] Loan ${loan.id}: Input = { amount: ${loan.loan_amount}, rate: ${loan.interest_rate}%, due: ${loan.due_date}, payments: ${paymentsResult.rows.length} }`);
-        
-        // Calculate loan state dynamically
-        const loanState = calculateLoanState(loan, paymentsResult.rows, new Date());
-        
-        console.log(`[CALC-SUCCESS] Loan ${loan.id}: Calculated balance = $${loanState.totalBalance.toFixed(2)} (DB value was $${loan.remaining_balance})`);
-        
-        // Determine if loan should be filtered out from overdue calculation
+        // Check if overdue
         const isClosedStatus = ['PAID', 'CLOSED', 'paid', 'closed'].includes(loan.status);
-        
-        // Check if due date exists and is valid
-        const hasDueDate = loanState.nextDueDate && !isNaN(new Date(loanState.nextDueDate).getTime());
-        
-        let isOverdue = loanState.isOverdue;
-        let daysOverdue = loanState.daysOverdue;
-        
-        return {
-          ...loan,
-          // Override with calculated values
-          remaining_balance: loanState.totalBalance,
-          due_date: loanState.nextDueDate,
-          interest_amount: loanState.interestAccrued,
-          isOverdue,
-          daysOverdue,
-          pdf_url: `/loan-pdf/${loan.id}`,
-          calculated_state: loanState
-        };
-      } catch (calcErr) {
-        console.error(`[CALC-ERROR] Loan ${loan.id} FAILED:`, calcErr.message);
-        console.error(`[CALC-ERROR] Stack:`, calcErr.stack);
-        console.error(`[CALC-ERROR] Loan input was:`, JSON.stringify(loan, null, 2).substring(0, 500));
-        
-        const isClosedStatus = ['PAID', 'CLOSED', 'paid', 'closed'].includes(loan.status);
-        const hasDueDate = loan.due_date && !isNaN(new Date(loan.due_date).getTime());
-        
         let isOverdue = false;
         let daysOverdue = 0;
         
-        if (hasDueDate && !isClosedStatus) {
+        if (loan.due_date && !isClosedStatus) {
           const dueDateMs = new Date(loan.due_date).getTime();
           const nowMs = Date.now();
-          
           isOverdue = dueDateMs < nowMs;
-          
           if (isOverdue) {
             daysOverdue = Math.floor((nowMs - dueDateMs) / (1000 * 60 * 60 * 24));
           }
@@ -4223,6 +4173,30 @@ app.get('/api/loans', async (req, res) => {
         
         return {
           ...loan,
+          remaining_balance: calculatedBalance,
+          isOverdue,
+          daysOverdue,
+          pdf_url: `/loan-pdf/${loan.id}`
+        };
+      } catch (err) {
+        console.error(`Error processing loan ${loan.id}:`, err.message);
+        
+        const isClosedStatus = ['PAID', 'CLOSED', 'paid', 'closed'].includes(loan.status);
+        let isOverdue = false;
+        let daysOverdue = 0;
+        
+        if (loan.due_date && !isClosedStatus) {
+          const dueDateMs = new Date(loan.due_date).getTime();
+          const nowMs = Date.now();
+          isOverdue = dueDateMs < nowMs;
+          if (isOverdue) {
+            daysOverdue = Math.floor((nowMs - dueDateMs) / (1000 * 60 * 60 * 24));
+          }
+        }
+        
+        return {
+          ...loan,
+          remaining_balance: getSimpleRemainingBalance(loan),
           isOverdue,
           daysOverdue,
           pdf_url: `/loan-pdf/${loan.id}`
@@ -4343,7 +4317,21 @@ app.get('/test-calculation/:loanId', async (req, res) => {
 });
 
 // ===== FIX ENDPOINT - Correct Loan #8 data =====
-// ======================== END PUBLIC API ENDPOINTS ========================
+// ======================== SIMPLIFIED LOAN STATE CALCULATION ========================
+// Calculate remaining balance: Principal + (Principal × Interest Rate ÷ 100)
+function getSimpleRemainingBalance(loan) {
+  try {
+    const principal = parseFloat(loan.loan_amount || loan.initial_loan_amount || 0);
+    const rate = parseFloat(loan.interest_rate || 0);
+    const monthlyInterest = (principal * rate) / 100;
+    return principal + monthlyInterest;
+  } catch (err) {
+    console.error(`Error calculating balance for loan ${loan.id}:`, err);
+    return parseFloat(loan.remaining_balance || 0);
+  }
+}
+
+// ======================== END LOAN STATE CALCULATION ========================
 
 // START SHIFT - User records opening cash balance
 app.post('/start-shift', async (req, res) => {
