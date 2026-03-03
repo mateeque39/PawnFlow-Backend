@@ -4196,6 +4196,87 @@ app.get('/api/loans', async (req, res) => {
   }
 });
 
+// ===== DIAGNOSTIC ENDPOINT - Test calculation on Loan #8 =====
+app.get('/test-calculation/:loanId', async (req, res) => {
+  try {
+    const { loanId } = req.params;
+    console.log(`\n🧪 TEST-CALC: Starting test for loan ${loanId}`);
+    
+    // Get loan from DB
+    const loanResult = await pool.query('SELECT * FROM loans WHERE id = $1', [loanId]);
+    if (loanResult.rows.length === 0) {
+      return res.status(404).json({ message: 'Loan not found' });
+    }
+    
+    const dbLoan = loanResult.rows[0];
+    console.log(`🧪 TEST-CALC: Found loan in DB: $${dbLoan.remaining_balance} (transaction: ${dbLoan.transaction_number})`);
+    
+    // Get payments
+    const paymentResult = await pool.query(
+      'SELECT * FROM payments WHERE loan_id = $1 ORDER BY payment_date ASC',
+      [loanId]
+    );
+    const payments = paymentResult.rows;
+    console.log(`🧪 TEST-CALC: Found ${payments.length} payments`);
+    payments.forEach((p, i) => {
+      console.log(`  Payment ${i+1}: ${p.payment_date} - $${p.payment_amount}`);
+    });
+    
+    // Try to calculate
+    console.log(`🧪 TEST-CALC: Calling calculateLoanState...`);
+    let calculated = null;
+    try {
+      calculated = calculateLoanState(dbLoan, payments, new Date());
+      console.log(`✅ TEST-CALC: Calculation succeeded!`);
+      console.log(`  Principal: $${calculated.principalRemaining.toFixed(2)}`);
+      console.log(`  Interest: $${calculated.interestAccrued.toFixed(2)}`);
+      console.log(`  Penalty: $${calculated.penaltyAccrued.toFixed(2)}`);
+      console.log(`  TOTAL: $${calculated.totalBalance.toFixed(2)}`);
+    } catch (calcErr) {
+      console.error(`❌ TEST-CALC: Calculation FAILED:`, calcErr.message);
+      console.error(`Stack:`, calcErr.stack);
+      throw calcErr;
+    }
+    
+    res.json({
+      test_result: 'OK',
+      loan_id: loanId,
+      database_values: {
+        id: dbLoan.id,
+        transaction_number: dbLoan.transaction_number,
+        loan_amount: dbLoan.loan_amount,
+        interest_rate: dbLoan.interest_rate,
+        db_remaining_balance: dbLoan.remaining_balance,
+        db_interest_amount: dbLoan.interest_amount,
+        db_due_date: dbLoan.due_date,
+        created_at: dbLoan.created_at
+      },
+      calculated_values: {
+        principal_remaining: calculated.principalRemaining,
+        interest_accrued: calculated.interestAccrued,
+        penalty_accrued: calculated.penaltyAccrued,
+        total_balance: calculated.totalBalance,
+        next_due_date: calculated.nextDueDate,
+        is_overdue: calculated.isOverdue
+      },
+      difference: {
+        remaining_balance_diff: (calculated.totalBalance - dbLoan.remaining_balance).toFixed(2),
+        is_different: calculated.totalBalance !== dbLoan.remaining_balance
+      },
+      payments: payments.map(p => ({
+        date: p.payment_date,
+        amount: p.payment_amount
+      }))
+    });
+  } catch (err) {
+    console.error('❌ TEST-CALC: Error:', err.message);
+    res.status(500).json({ 
+      message: 'Test failed', 
+      error: err.message 
+    });
+  }
+});
+
 // ======================== END PUBLIC API ENDPOINTS ========================
 
 // START SHIFT - User records opening cash balance
