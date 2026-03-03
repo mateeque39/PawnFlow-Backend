@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import { http } from "./services/httpClient";
 import logger from "./services/logger";
 import { getErrorMessage } from "./services/errorHandler";
+import LoanStateDisplay from "./LoanStateDisplay";
 
 const SearchLoanForm = ({ loggedInUser }) => {
   const [firstName, setFirstName] = useState("");
@@ -13,6 +14,7 @@ const SearchLoanForm = ({ loggedInUser }) => {
   const [loans, setLoans] = useState([]);
   const [message, setMessage] = useState("");
   const [paymentHistory, setPaymentHistory] = useState([]);
+  const [paymentHistoryByLoan, setPaymentHistoryByLoan] = useState({}); // Track per-loan history
   const [amountToAdd, setAmountToAdd] = useState("");
   const [selectedLoanId, setSelectedLoanId] = useState(null);
 
@@ -62,19 +64,29 @@ const SearchLoanForm = ({ loggedInUser }) => {
         }
       });
 
-      // Fetch payment history for the first loan if it has an id
-      const firstLoan = response.data[0];
-      if (firstLoan && (firstLoan.id || firstLoan.transaction_number)) {
-        try {
-          const paymentRes = await http.get("/payment-history", {
-            params: { loanId: firstLoan.id || firstLoan.transaction_number, _ts: Date.now() },
-          });
-
-          setPaymentHistory(paymentRes.data || []);
-        } catch (histErr) {
-          logger.warn('Could not fetch payment history:', histErr?.parsedError || histErr);
-          setPaymentHistory([]);
+      // Fetch payment history for ALL loans
+      const historyMap = {};
+      for (const loan of response.data) {
+        if (loan.id) {
+          try {
+            const paymentRes = await http.get("/payment-history", {
+              params: { loanId: loan.id, _ts: Date.now() },
+            });
+            historyMap[loan.id] = paymentRes.data || [];
+            logger.info(`Fetched ${historyMap[loan.id].length} payments for loan ${loan.id}`);
+          } catch (histErr) {
+            logger.warn(`Could not fetch payment history for loan ${loan.id}:`, histErr?.parsedError || histErr);
+            historyMap[loan.id] = [];
+          }
         }
+      }
+      
+      setPaymentHistoryByLoan(historyMap);
+      
+      // Also set first loan history for backward compatibility
+      const firstLoan = response.data[0];
+      if (firstLoan && historyMap[firstLoan.id]) {
+        setPaymentHistory(historyMap[firstLoan.id]);
       } else {
         setPaymentHistory([]);
       }
@@ -299,12 +311,29 @@ const SearchLoanForm = ({ loggedInUser }) => {
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginBottom: '15px' }}>
                 <div>
                   <p><strong>Loan Amount:</strong> $ {loan.loan_amount}</p>
-                  <p><strong>Interest Amount:</strong> $ {loan.interest_amount}</p>
+                  <p><strong>Interest Rate:</strong> {loan.interest_rate}%</p>
                 </div>
                 <div>
-                  <p><strong>Total Payable Amount:</strong> $ {loan.total_payable_amount}</p>
-                  <p><strong>Remaining Balance:</strong> $ {loan.remaining_balance}</p>
+                  <p><strong>Loan Issued Date:</strong> {loan.loan_issued_date?.substring(0, 10)}</p>
+                  <p><strong>Original Due Date:</strong> {loan.due_date?.substring(0, 10)}</p>
                 </div>
+              </div>
+
+              {/* Dynamic Loan State Calculation */}
+              <div style={{ marginBottom: '15px' }}>
+                <LoanStateDisplay 
+                  loan={{
+                    loan_amount: parseFloat(loan.loan_amount),
+                    interest_rate: parseFloat(loan.interest_rate),
+                    created_at: loan.created_at || loan.loan_issued_date,
+                    due_date: loan.due_date
+                  }}
+                  payments={(paymentHistoryByLoan[loan.id] || []).map(p => ({
+                    payment_amount: parseFloat(p.payment_amount),
+                    payment_date: p.payment_date
+                  }))}
+                  autoRefresh={30000}
+                />
               </div>
 
               <div style={{ marginBottom: '15px' }}>
