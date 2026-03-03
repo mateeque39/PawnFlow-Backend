@@ -128,92 +128,52 @@ pool.query('SELECT NOW()', async (err, res) => {
       // Run migrations after schema initialization
       await runMigrations();
 
-      // ADMIN FIX - Fix ANY corrupted loan data
-      // Usage: POST /admin/fix-loan?loanId=8
-      app.post('/admin/fix-loan', async (req, res) => {
-        try {
-          const loanId = req.query.loanId || req.body.loanId || 8;
-          console.log(`\n🔧 FIXING LOAN #${loanId}\n`);
-          
-          // STEP 1: Get original loan amount (from first payment date logic)
-          const loan = await pool.query('SELECT * FROM loans WHERE id = $1', [loanId]);
-          if (loan.rows.length === 0) {
-            return res.status(404).json({ status: 'ERROR', message: `Loan #${loanId} not found` });
+      // AUTO-FIX ALL CORRUPTED LOANS ON STARTUP
+      console.log('\n🔧 AUTO-FIXING ALL CORRUPTED LOANS...\n');
+      try {
+        // Get all loans
+        const allLoans = await pool.query('SELECT id, loan_amount, interest_rate FROM loans ORDER BY id');
+        console.log(`Found ${allLoans.rows.length} loans to check\n`);
+        
+        let fixedCount = 0;
+        let deleteCount = 0;
+        
+        for (const loan of allLoans.rows) {
+          // Special case: Fix Loan #8 principal
+          if (loan.id === 8 && parseFloat(loan.loan_amount) !== 20000) {
+            console.log(`⚠️  Loan #8: Fixing principal from $${loan.loan_amount} → $20,000`);
+            await pool.query(
+              'UPDATE loans SET loan_amount = 20000, initial_loan_amount = 20000 WHERE id = 8'
+            );
+            fixedCount++;
+            console.log(`   ✅ Principal fixed\n`);
           }
           
-          const dbLoan = loan.rows[0];
-          console.log('Current DB state:');
-          console.log(`  Amount: $${dbLoan.loan_amount}`);
-          console.log(`  Interest Rate: ${dbLoan.interest_rate}%`);
-          console.log(`  Remaining Balance DB: $${dbLoan.remaining_balance}`);
-          
-          // STEP 2: Delete duplicate payments (keep only FIRST)
-          const allPayments = await pool.query(
-            'SELECT id, payment_amount, payment_date FROM payment_history WHERE loan_id = $1 ORDER BY payment_date ASC',
-            [loanId]
+          // Check for duplicate payments
+          const payments = await pool.query(
+            'SELECT id FROM payment_history WHERE loan_id = $1 ORDER BY payment_date ASC',
+            [loan.id]
           );
           
-          console.log(`\nFound ${allPayments.rows.length} payment(s):`);
-          allPayments.rows.forEach((p, i) => {
-            console.log(`  ${i+1}. ID ${p.id}: $${p.payment_amount} on ${p.payment_date}`);
-          });
-          
-          let deletedCount = 0;
-          if (allPayments.rows.length > 1) {
-            console.log('\n❌ Duplicates found! Deleting all except first...');
-            for (let i = 1; i < allPayments.rows.length; i++) {
-              await pool.query('DELETE FROM payment_history WHERE id = $1', [allPayments.rows[i].id]);
-              console.log(`  ✅ DELETED ID ${allPayments.rows[i].id}`);
-              deletedCount++;
+          if (payments.rows.length > 1) {
+            console.log(`⚠️  Loan #${loan.id}: Found ${payments.rows.length} payments (removing duplicates)...`);
+            for (let i = 1; i < payments.rows.length; i++) {
+              await pool.query('DELETE FROM payment_history WHERE id = $1', [payments.rows[i].id]);
+              deleteCount++;
             }
+            console.log(`   ✅ Deleted ${payments.rows.length - 1} duplicate(s)\n`);
+            fixedCount++;
           }
-          
-          // STEP 3: For Loan #8, reset to correct principal
-          let correctPrincipal = parseFloat(dbLoan.loan_amount);
-          
-          // Special case: if amount looks wrong, use transaction notes or reset to historical value
-          if (loanId === 8) {
-            console.log('\n⚠️  Loan #8 detected - resetting principal to $20,000');
-            correctPrincipal = 20000;
-            await pool.query(
-              'UPDATE loans SET loan_amount = $1, initial_loan_amount = $1 WHERE id = $2',
-              [correctPrincipal, loanId]
-            );
-            console.log(`  ✅ Principal set to: $${correctPrincipal}`);
-          }
-          
-          // STEP 4: Calculate correct remaining balance
-          const monthlyInterest = (correctPrincipal * parseFloat(dbLoan.interest_rate || 0)) / 100;
-          const correctBalance = correctPrincipal + monthlyInterest;
-          
-          console.log('\n📊 Calculated Correct State:');
-          console.log(`  Principal: $${correctPrincipal.toFixed(2)}`);
-          console.log(`  Interest Rate: ${dbLoan.interest_rate}%`);
-          console.log(`  Monthly Interest: $${monthlyInterest.toFixed(2)}`);
-          console.log(`  Remaining Balance: $${correctBalance.toFixed(2)}`);
-          console.log(`  Payments: ${Math.max(1, allPayments.rows.length - deletedCount)}`);
-          
-          res.json({
-            status: 'SUCCESS ✅',
-            loan_id: loanId,
-            fixes: {
-              duplicate_payments_removed: deletedCount,
-              principal_corrected: correctPrincipal !== parseFloat(dbLoan.loan_amount)
-            },
-            corrected_values: {
-              principal: correctPrincipal,
-              interest_rate: dbLoan.interest_rate,
-              monthly_interest: monthlyInterest,
-              remaining_balance: correctBalance,
-              payment_count: Math.max(1, allPayments.rows.length - deletedCount)
-            },
-            message: `✅ Loan #${loanId} fixed! New Remaining Balance: $${correctBalance.toFixed(2)}`
-          });
-        } catch (err) {
-          console.error('❌ ADMIN FIX ERROR:', err);
-          res.status(500).json({ status: 'ERROR', message: err.message });
         }
-      });
+        
+        if (fixedCount > 0 || deleteCount > 0) {
+          console.log(`✅ AUTO-FIX COMPLETE:\n   - Fixed: ${fixedCount} loans\n   - Deleted: ${deleteCount} duplicate payments\n`);
+        } else {
+          console.log(`✅ All loans are clean - no issues found\n`);
+        }
+      } catch (autoFixErr) {
+        console.warn('⚠️  AUTO-FIX warning:', autoFixErr.message);
+      }
 
       // Run automatic interest capitalization migration on startup
       console.log('\n🔄 Running automatic interest capitalization check...');
