@@ -128,7 +128,16 @@ pool.query('SELECT NOW()', async (err, res) => {
       // Run migrations after schema initialization
       await runMigrations();
 
-      // AUTO-FIX ALL CORRUPTED LOANS ON STARTUP
+      // Run automatic interest capitalization migration on startup FIRST
+      console.log('\n🔄 Running automatic interest capitalization check...');
+      const migrationResult = await runMigrationOnStartup(pool);
+      if (migrationResult.success) {
+        console.log(`✅ Auto-migration complete: ${migrationResult.message}`);
+      } else {
+        console.warn(`⚠️  Auto-migration warning: ${migrationResult.message}`);
+      }
+
+      // AUTO-FIX ALL CORRUPTED LOANS ON STARTUP (runs AFTER migration to overwrite any corruptions)
       console.log('\n🔧 AUTO-FIXING ALL CORRUPTED LOAN CALCULATIONS...\n');
       try {
         // Get all loans with all needed fields
@@ -214,15 +223,6 @@ pool.query('SELECT NOW()', async (err, res) => {
         console.log(`✅ AUTO-FIX COMPLETE:\n   ✓ All ${fixedCount} loans recalculated\n   ✓ Removed ${deleteCount} duplicate payments\n`);
       } catch (autoFixErr) {
         console.error('❌ AUTO-FIX ERROR:', autoFixErr.message);
-      }
-
-      // Run automatic interest capitalization migration on startup
-      console.log('\n🔄 Running automatic interest capitalization check...');
-      const migrationResult = await runMigrationOnStartup(pool);
-      if (migrationResult.success) {
-        console.log(`✅ Auto-migration complete: ${migrationResult.message}`);
-      } else {
-        console.warn(`⚠️  Auto-migration warning: ${migrationResult.message}`);
       }
       
       // Start HTTP server
