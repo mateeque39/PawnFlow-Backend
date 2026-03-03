@@ -128,6 +128,71 @@ pool.query('SELECT NOW()', async (err, res) => {
       // Run migrations after schema initialization
       await runMigrations();
 
+      // CLEANUP ENDPOINT - Delete duplicate payment from Loan #8
+      app.post('/cleanup-loan-8', async (req, res) => {
+        try {
+          console.log('🧹 Cleaning duplicate payment from Loan #8...');
+          
+          // Get all payments for Loan #8
+          const payments = await pool.query(
+            'SELECT id, payment_amount, payment_date FROM payment_history WHERE loan_id = 8 ORDER BY payment_date ASC'
+          );
+          
+          console.log(`Found ${payments.rows.length} payments for Loan #8`);
+          
+          if (payments.rows.length <= 1) {
+            return res.json({ message: 'No duplicates to remove', payments: payments.rows });
+          }
+          
+          // Find and delete the LAST (most recent) duplicate if there are 2 identical payments
+          let deleted = [];
+          const paymentsByAmount = {};
+          
+          payments.rows.forEach(p => {
+            if (!paymentsByAmount[p.payment_amount]) {
+              paymentsByAmount[p.payment_amount] = [];
+            }
+            paymentsByAmount[p.payment_amount].push(p);
+          });
+          
+          for (const amount of Object.keys(paymentsByAmount)) {
+            if (paymentsByAmount[amount].length > 1) {
+              // Delete all but the first one
+              const toDelete = paymentsByAmount[amount].slice(1);
+              for (const p of toDelete) {
+                const result = await pool.query(
+                  'DELETE FROM payment_history WHERE id = $1 RETURNING *',
+                  [p.id]
+                );
+                deleted.push({
+                  id: p.id,
+                  amount: p.payment_amount,
+                  date: p.payment_date,
+                  message: 'DELETED'
+                });
+                console.log(`✅ DELETED duplicate payment: ID ${p.id}, $${p.payment_amount}, ${p.payment_date}`);
+              }
+            }
+          }
+          
+          // Verify final state
+          const finalPayments = await pool.query(
+            'SELECT id, payment_amount, payment_date FROM payment_history WHERE loan_id = 8 ORDER BY payment_date ASC'
+          );
+          
+          res.json({
+            status: 'SUCCESS',
+            deleted_count: deleted.length,
+            deleted_payments: deleted,
+            remaining_payments: finalPayments.rows,
+            message: `Removed ${deleted.length} duplicate payment(s). ${finalPayments.rows.length} payment(s) remain.`
+          });
+        } catch (err) {
+          console.error('❌ Cleanup error:', err.message);
+          res.status(500).json({ status: 'ERROR', message: err.message });
+        }
+      });
+
       // Run automatic interest capitalization migration on startup
       console.log('\n🔄 Running automatic interest capitalization check...');
       const migrationResult = await runMigrationOnStartup(pool);
