@@ -1605,7 +1605,7 @@ app.get('/customers/:customerId/loans', async (req, res) => {
       [customerIdNum]
     );
 
-    res.json({
+    const response = {
       activeLoans: activeLoansResult.rows,
       redeemedLoans: redeemedLoansResult.rows,
       forfeitedLoans: forfeitedLoansResult.rows,
@@ -1617,7 +1617,18 @@ app.get('/customers/:customerId/loans', async (req, res) => {
         totalPayments: paymentHistoryResult.rows.length,
         totalOutstanding: activeLoansResult.rows.reduce((sum, loan) => sum + parseFloat(loan.remaining_balance || 0), 0)
       }
+    };
+
+    // Debug log the response
+    console.log(`📤 Frontend API Response for Customer ${customerIdNum}:`);
+    [8, 9, 11].forEach(loanId => {
+      const loan = response.activeLoans.find(l => l.id === loanId);
+      if (loan) {
+        console.log(`  Loan #${loanId}: due_date=${loan.due_date}, extended_this_cycle=${loan.extended_this_cycle}`);
+      }
     });
+
+    res.json(response);
   } catch (err) {
     console.error('Error fetching customer loans:', err);
     res.status(500).json({ message: 'Error fetching customer loans', error: err.message });
