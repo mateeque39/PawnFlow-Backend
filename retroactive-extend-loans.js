@@ -1,0 +1,198 @@
+/**
+ * Retroactive Loan Auto-Extension Migration Script
+ * ================================================
+ * 
+ * This script identifies loans that made interest-only payments before the auto-extend
+ * feature was deployed and retroactively extends them by 1 month.
+ * 
+ * Criteria for retroactive extension:
+ * 1. Loan has payment history with interest-only payments
+ * 2. Loan hasn't been extended yet (extended_this_cycle = false)
+ * 3. Total interest paid in current cycle >= required interest for cycle
+ * 4. Payment was on or before original due date
+ * 
+ * Usage: node retroactive-extend-loans.js
+ */
+
+const { Pool } = require('pg');
+require('dotenv').config();
+
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  max: 5,
+});
+
+const LOG_PREFIX = '🏦 RETROACTIVE EXTEND:';
+
+/**
+ * Add months to a date
+ */
+function addMonths(date, months) {
+  const result = new Date(date);
+  result.setMonth(result.getMonth() + months);
+  return result;
+}
+
+/**
+ * Check if a loan qualifies for retroactive extension
+ */
+async function checkLoanQualifiesForExtension(client, loan) {
+  const loanId = loan.id;
+  
+  // Skip if already extended in this cycle
+  if (loan.extended_this_cycle) {
+    console.log(`   ⏭️  Loan ${loanId}: Already extended this cycle, skipping`);
+    return null;
+  }
+
+  // Get all payment history for this loan
+  const paymentHistoryResult = await client.query(
+    `SELECT payment_amount, payment_date, payment_method 
+     FROM payment_history 
+     WHERE loan_id = $1 
+     ORDER BY payment_date ASC`,
+    [loanId]
+  );
+
+  const payments = paymentHistoryResult.rows;
+  
+  if (payments.length === 0) {
+    console.log(`   ⏭️  Loan ${loanId}: No payments found`);
+    return null;
+  }
+
+  // Check if any payment was interest-only and before/on original due date
+  let totalInterestPaid = 0;
+  let hasQualifyingPayment = false;
+  const originalDueDate = loan.cycle_start_date 
+    ? new Date(loan.cycle_start_date) 
+    : new Date(loan.created_at);
+  
+  for (const payment of payments) {
+    const paymentDate = new Date(payment.payment_date);
+    
+    // Check if payment was before or on original due date
+    if (paymentDate <= new Date(loan.due_date)) {
+      totalInterestPaid += parseFloat(payment.payment_amount);
+      hasQualifyingPayment = true;
+      console.log(`      ✓ Payment: $${payment.payment_amount} on ${paymentDate.toISOString().split('T')[0]}`);
+    }
+  }
+
+  if (!hasQualifyingPayment) {
+    console.log(`   ⏭️  Loan ${loanId}: No qualifying payments found`);
+    return null;
+  }
+
+  // Check if total paid >= remaining interest
+  const requiredInterest = parseFloat(loan.interest_amount);
+  if (totalInterestPaid >= requiredInterest) {
+    console.log(`   ✅ Loan ${loanId} QUALIFIES: Paid $${totalInterestPaid.toFixed(2)} interest (required: $${requiredInterest.toFixed(2)})`);
+    return {
+      loanId,
+      totalInterestPaid,
+      requiredInterest,
+      newDueDate: addMonths(new Date(loan.due_date), 1)
+    };
+  }
+
+  console.log(`   ⏭️  Loan ${loanId}: Only paid $${totalInterestPaid.toFixed(2)}, needs $${requiredInterest.toFixed(2)}`);
+  return null;
+}
+
+/**
+ * Extend a single loan
+ */
+async function extendLoan(client, loanId, newDueDate) {
+  const result = await client.query(
+    `UPDATE loans 
+     SET 
+       due_date = $1,
+       extended_this_cycle = true,
+       last_extended_at = CURRENT_TIMESTAMP,
+       updated_at = CURRENT_TIMESTAMP
+     WHERE id = $2
+     RETURNING id, due_date, extended_this_cycle, last_extended_at`,
+    [newDueDate, loanId]
+  );
+
+  return result.rows[0];
+}
+
+/**
+ * Main migration function
+ */
+async function runMigration() {
+  const client = await pool.connect();
+
+  try {
+    console.log(`\n${LOG_PREFIX} Starting retroactive loan extension migration...\n`);
+
+    // Get all active loans that haven't been extended
+    const loansResult = await client.query(
+      `SELECT * FROM loans 
+       WHERE status = 'active' AND extended_this_cycle = false
+       ORDER BY id ASC`
+    );
+
+    const loans = loansResult.rows;
+    console.log(`${LOG_PREFIX} Found ${loans.length} loans that haven't been extended\n`);
+
+    if (loans.length === 0) {
+      console.log(`${LOG_PREFIX} No loans need extension. Migration complete! ✅\n`);
+      return;
+    }
+
+    let extendedCount = 0;
+    const extendedLoans = [];
+
+    // Check each loan for extension eligibility
+    for (const loan of loans) {
+      console.log(`\n📋 Checking Loan ${loan.id}: Principal=$${loan.loan_amount}, Interest=$${loan.interest_amount}`);
+      
+      const qualification = await checkLoanQualifiesForExtension(client, loan);
+      
+      if (qualification) {
+        // Extend the loan
+        const updated = await extendLoan(client, qualification.loanId, qualification.newDueDate);
+        extendedCount++;
+        extendedLoans.push({
+          loanId: qualification.loanId,
+          originalDueDate: loan.due_date,
+          newDueDate: updated.due_date,
+          interestPaid: qualification.totalInterestPaid.toFixed(2)
+        });
+        
+        console.log(`   🎉 Extended! New due date: ${updated.due_date.toISOString().split('T')[0]}`);
+      }
+    }
+
+    // Summary
+    console.log(`\n${'='.repeat(70)}`);
+    console.log(`${LOG_PREFIX} MIGRATION COMPLETE`);
+    console.log(`${'='.repeat(70)}`);
+    console.log(`✅ Extended ${extendedCount} loans out of ${loans.length} total\n`);
+
+    if (extendedLoans.length > 0) {
+      console.log('Extended Loans Summary:');
+      console.log('────────────────────────────────────────────────────────────────────');
+      extendedLoans.forEach((loan, idx) => {
+        console.log(`${idx + 1}. Loan #${loan.loanId}`);
+        console.log(`   Original Due Date: ${loan.originalDueDate}`);
+        console.log(`   New Due Date:      ${loan.newDueDate}`);
+        console.log(`   Interest Paid:     $${loan.interestPaid}`);
+      });
+      console.log('────────────────────────────────────────────────────────────────────\n');
+    }
+
+  } catch (err) {
+    console.error(`\n❌ ${LOG_PREFIX} Migration failed:`, err);
+    process.exit(1);
+  } finally {
+    client.release();
+    await pool.end();
+  }
+}
+
+// Run the migration
+runMigration();

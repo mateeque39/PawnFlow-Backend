@@ -232,5 +232,150 @@ function processPaymentWithCapitalization(loan, paymentAmount, totalPaymentsAfte
 module.exports = {
   extendDateByOneMonth,
   capitalizeInterest,
-  processPaymentWithCapitalization
+  processPaymentWithCapitalization,
+  processPaymentWithAutoExtend
 };
+
+/**
+ * NEW BUSINESS RULE: Auto-extend due date when interest-only payment is made before/on due date
+ * 
+ * Rule: If payment(s) BEFORE or ON loan.dueDate and total amount paid toward CURRENT CYCLE INTEREST >= loan.interestAmount:
+ *   1) Extend loan.dueDate by exactly 1 month
+ *   2) Do NOT reduce principal for "interest-only" portion
+ *   3) Interest charged again for next cycle, so remainingBalance stays principal + nextCycleInterest
+ *   4) Support multiple partial payments (e.g. 300+300 should trigger extension)
+ *   5) Prevent multiple extensions within same cycle
+ *
+ * @param {Object} loan - Current loan record
+ * @param {number} paymentAmount - Amount being paid NOW
+ * @param {Date} paymentDate - Date of the payment (optional, defaults to today)
+ * @returns {Object} - Object with new loan values and extension flags
+ */
+function processPaymentWithAutoExtend(loan, paymentAmount, paymentDate) {
+  paymentDate = paymentDate || new Date();
+  
+  const loanId = loan.id;
+  const principal = parseFloat(loan.loan_amount || 0);
+  const interestRate = parseFloat(loan.interest_rate || 0);
+  const currentInterestAmount = parseFloat(loan.interest_amount || 0);
+  const dueDate = new Date(loan.due_date);
+  const interestPaidThisCycle = parseFloat(loan.interest_paid_this_cycle || 0);
+  const extendedThisCycle = loan.extended_this_cycle === true || loan.extended_this_cycle === 'true';
+  const currentRemaining = parseFloat(loan.remaining_balance || 0);
+  const status = loan.status?.toLowerCase() || 'active';
+  
+  // Normalize payment date to date only (for comparison)
+  const paymentDateOnly = new Date(paymentDate);
+  paymentDateOnly.setHours(0, 0, 0, 0);
+  
+  const dueDateOnly = new Date(dueDate);
+  dueDateOnly.setHours(0, 0, 0, 0);
+  
+  console.log(`\n💳 AUTO-EXTEND PAYMENT PROCESSING - Loan ${loanId}`);
+  console.log(`   Payment Date: ${paymentDateOnly.toISOString().split('T')[0]}`);
+  console.log(`   Due Date: ${dueDate.toISOString().split('T')[0]}`);
+  console.log(`   Payment Amount: $${paymentAmount.toFixed(2)}`);
+  console.log(`   Current Interest This Cycle: $${currentInterestAmount.toFixed(2)}`);
+  console.log(`   Previously Paid This Cycle: $${interestPaidThisCycle.toFixed(2)}`);
+  console.log(`   Already Extended This Cycle: ${extendedThisCycle}`);
+  
+  // Check 1: Is payment before or on due date?
+  const isBeforeOrOnDueDate = paymentDateOnly <= dueDateOnly;
+  console.log(`   Payment is before/on due date: ${isBeforeOrOnDueDate}`);
+  
+  // If payment is after due date, apply normal logic (no auto-extend)
+  if (!isBeforeOrOnDueDate) {
+    console.log(`   ⏭️  PAYMENT AFTER DUE DATE - No auto-extend triggers`);
+    
+    // Just apply payment to remaining balance
+    const newRemaining = Math.max(currentRemaining - paymentAmount, 0);
+    return {
+      autoExtendTriggered: false,
+      newPrincipal: principal,
+      newInterestAmount: currentInterestAmount,
+      newDueDate: dueDate.toISOString().split('T')[0],
+      newInterestPaidThisCycle: interestPaidThisCycle,
+      newExtendedThisCycle: false,
+      finalRemainingBalance: newRemaining,
+      newStatus: newRemaining === 0 ? 'redeemed' : status,
+      message: 'Payment applied (after due date, no extension)'
+    };
+  }
+  
+  // Check 2: Has already been extended this cycle?
+  if (extendedThisCycle) {
+    console.log(`   ⏭️  ALREADY EXTENDED THIS CYCLE - No double extension`);
+    
+    // Just apply payment to remaining balance
+    const newRemaining = Math.max(currentRemaining - paymentAmount, 0);
+    return {
+      autoExtendTriggered: false,
+      newPrincipal: principal,
+      newInterestAmount: currentInterestAmount,
+      newDueDate: dueDate.toISOString().split('T')[0],
+      newInterestPaidThisCycle: interestPaidThisCycle + paymentAmount,
+      newExtendedThisCycle: true,
+      finalRemainingBalance: newRemaining,
+      newStatus: newRemaining === 0 ? 'redeemed' : status,
+      message: 'Payment applied (already extended this cycle)'
+    };
+  }
+  
+  // Check 3: Calculate total interest paid after this payment
+  const totalInterestPaidAfter = interestPaidThisCycle + paymentAmount;
+  console.log(`   Total interest paid after this: $${totalInterestPaidAfter.toFixed(2)}`);
+  
+  // Check 4: Does total payment reach interest amount?
+  const reachesInterest = totalInterestPaidAfter >= currentInterestAmount;
+  console.log(`   Reaches interest amount ($${currentInterestAmount.toFixed(2)}): ${reachesInterest}`);
+  
+  if (!reachesInterest) {
+    console.log(`   ❌ Interest payment insufficient - no extension`);
+    
+    // Not enough to trigger extension, just accumulate and apply payment
+    const newRemaining = Math.max(currentRemaining - paymentAmount, 0);
+    return {
+      autoExtendTriggered: false,
+      newPrincipal: principal,
+      newInterestAmount: currentInterestAmount,
+      newDueDate: dueDate.toISOString().split('T')[0],
+      newInterestPaidThisCycle: totalInterestPaidAfter,
+      newExtendedThisCycle: false,
+      finalRemainingBalance: newRemaining,
+      newStatus: newRemaining === 0 ? 'redeemed' : status,
+      message: `Payment applied. Interest accumulated: $${totalInterestPaidAfter.toFixed(2)} of $${currentInterestAmount.toFixed(2)}`
+    };
+  }
+  
+  // ===== AUTO-EXTEND TRIGGERED =====
+  console.log(`\n✅ AUTO-EXTEND TRIGGERED!`);
+  
+  // Extend due date by exactly 1 month
+  const newDueDate = extendDateByOneMonth(dueDate);
+  console.log(`   Due date extended: ${dueDate.toISOString().split('T')[0]} → ${newDueDate}`);
+  
+  // Reset cycle tracking
+  const newInterestPaidThisCycle = 0; // Reset for next cycle
+  const newExtendedThisCycle = true;
+  
+  // Remaining balance: principal + nextCycleInterest (computed as principal * rate / 100)
+  // The payment covered the interest, so we don't reduce the principal
+  const nextCycleInterest = (principal * interestRate) / 100;
+  const finalRemainingBalance = principal + nextCycleInterest;
+  
+  console.log(`   Principal (unchanged): $${principal.toFixed(2)}`);
+  console.log(`   Next cycle interest: $${nextCycleInterest.toFixed(2)}`);
+  console.log(`   Final remaining balance: $${finalRemainingBalance.toFixed(2)}`);
+  
+  return {
+    autoExtendTriggered: true,
+    newPrincipal: principal,
+    newInterestAmount: nextCycleInterest,
+    newDueDate: newDueDate,
+    newInterestPaidThisCycle: newInterestPaidThisCycle,
+    newExtendedThisCycle: newExtendedThisCycle,
+    finalRemainingBalance: finalRemainingBalance,
+    newStatus: status, // Stays active
+    message: `✅ Auto-extended! Interest-only payment of $${paymentAmount.toFixed(2)} → Due date extended to ${newDueDate}`
+  };
+}

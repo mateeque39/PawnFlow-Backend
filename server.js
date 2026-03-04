@@ -5,7 +5,7 @@ const cors = require('cors');
 const { Pool } = require('pg');
 const validators = require('./validators');
 const { generateLoanPDF } = require('./pdf-invoice-generator');
-const { processPaymentWithCapitalization, extendDateByOneMonth } = require('./payment-utils');
+const { processPaymentWithCapitalization, extendDateByOneMonth, processPaymentWithAutoExtend } = require('./payment-utils');
 const { runMigrationOnStartup } = require('./migrate-on-startup');
 const { calculateLoanState } = require('./loan-calculator');
 const nodemailer = require('nodemailer');
@@ -1506,36 +1506,41 @@ app.get('/search-loan', async (req, res) => {
 app.post('/make-payment', authenticateToken, requireActiveShift, async (req, res) => {
   const { loanId, paymentMethod, paymentAmount, userId } = req.body;
 
+  let client;
   try {
     // Validate inputs
     if (!loanId || !paymentAmount || parseFloat(paymentAmount) <= 0) {
       return res.status(400).json({ message: 'Valid loan ID and payment amount required' });
     }
 
-    // Fetch the loan details
-    const loanResult = await pool.query('SELECT * FROM loans WHERE id = $1', [loanId]);
+    // Use transaction for safety
+    client = await pool.connect();
+    await client.query('BEGIN');
+
+    // Fetch the loan details with row locking
+    const loanResult = await client.query('SELECT * FROM loans WHERE id = $1 FOR UPDATE', [loanId]);
     const loan = loanResult.rows[0];
 
     if (!loan) {
+      await client.query('ROLLBACK');
       return res.status(404).json({ message: 'Loan not found' });
     }
 
     const payment = parseFloat(paymentAmount);
     const method = paymentMethod || 'cash';
+    const paymentDate = new Date();
 
-    // Use the new interest capitalization payment processing
-    const paymentResult = processPaymentWithCapitalization(loan, payment, payment);
+    console.log(`\n💳 AUTO-EXTEND PAYMENT ENDPOINT - Loan ${loanId}, Payment: $${payment.toFixed(2)}`);
 
-    console.log(`\n📊 PAYMENT RESULT:`);
-    console.log(`   New Principal: $${paymentResult.newPrincipal.toFixed(2)}`);
-    console.log(`   New Interest: $${paymentResult.newInterestAmount.toFixed(2)}`);
-    console.log(`   New Remaining Balance: $${paymentResult.finalRemainingBalance.toFixed(2)}`);
-    console.log(`   Interest Capitalized: ${paymentResult.interestCapitalized}`);
-    console.log(`   Due Date Extended: ${paymentResult.dueDateExtended}`);
-    console.log(`   New Due Date: ${paymentResult.newDueDate}`);
+    // Process payment with auto-extend logic
+    const paymentResult = processPaymentWithAutoExtend(loan, payment, paymentDate);
 
-    // Update the loan with new calculated values
-    const updatedLoanResult = await pool.query(
+    console.log(`   Auto-extend triggered: ${paymentResult.autoExtendTriggered}`);
+    console.log(`   New due date: ${paymentResult.newDueDate}`);
+    console.log(`   New remaining balance: $${paymentResult.finalRemainingBalance.toFixed(2)}`);
+
+    // Update the loan with new calculated values using transaction
+    const updatedLoanResult = await client.query(
       `UPDATE loans SET 
         loan_amount = $1,
         remaining_balance = $2, 
@@ -1543,8 +1548,11 @@ app.post('/make-payment', authenticateToken, requireActiveShift, async (req, res
         due_date = $4, 
         status = $5,
         total_payable_amount = $6,
+        interest_paid_this_cycle = $7,
+        extended_this_cycle = $8,
+        last_extended_at = CASE WHEN $8 = true THEN CURRENT_TIMESTAMP ELSE last_extended_at END,
         updated_at = CURRENT_TIMESTAMP
-       WHERE id = $7 RETURNING *`,
+       WHERE id = $9 RETURNING *`,
       [
         paymentResult.newPrincipal,
         paymentResult.finalRemainingBalance,
@@ -1552,17 +1560,22 @@ app.post('/make-payment', authenticateToken, requireActiveShift, async (req, res
         paymentResult.newDueDate,
         paymentResult.newStatus,
         paymentResult.finalRemainingBalance,
+        paymentResult.newInterestPaidThisCycle,
+        paymentResult.newExtendedThisCycle,
         loanId
       ]
     );
 
-    // Insert payment history
-    const paymentHistoryResult = await pool.query(
+    // Insert payment history within same transaction
+    const paymentHistoryResult = await client.query(
       'INSERT INTO payment_history (loan_id, payment_method, payment_amount, payment_date, created_by) VALUES ($1, $2, $3, CURRENT_TIMESTAMP, $4) RETURNING *',
       [loanId, method, payment, userId || null]
     );
 
-    // Generate receipt PDF
+    // Commit transaction
+    await client.query('COMMIT');
+
+    // Generate receipt PDF (outside transaction)
     let receiptPDF = null;
     try {
       const updatedLoan = updatedLoanResult.rows[0];
@@ -1574,14 +1587,12 @@ app.post('/make-payment', authenticateToken, requireActiveShift, async (req, res
     }
 
     // Build response based on result
-    let responseMessage = 'Payment successfully processed!';
+    let responseMessage = paymentResult.message || 'Payment successfully processed!';
     
     if (paymentResult.finalRemainingBalance === 0) {
       responseMessage = '🎉 Loan fully paid off and automatically redeemed!';
-    } else if (paymentResult.interestCapitalized) {
-      responseMessage = `✅ Payment applied! Interest capitalized and added to principal. Due date extended to ${paymentResult.newDueDate}.`;
-    } else if (paymentResult.dueDateExtended && !paymentResult.interestCapitalized) {
-      responseMessage = `✅ Payment applied. Due date extended to ${paymentResult.newDueDate}.`;
+    } else if (paymentResult.autoExtendTriggered) {
+      responseMessage = `✅ ${paymentResult.message}`;
     }
 
     res.status(200).json({
@@ -1591,19 +1602,31 @@ app.post('/make-payment', authenticateToken, requireActiveShift, async (req, res
       receiptPDF: receiptPDF,
       paymentDetails: {
         paymentAmount: payment.toFixed(2),
-        interestCapitalized: paymentResult.interestCapitalized,
-        capitalizedAmount: paymentResult.interestCapitalized ? parseFloat(loan.interest_amount).toFixed(2) : null,
+        autoExtendTriggered: paymentResult.autoExtendTriggered,
+        autoExtendMessage: paymentResult.autoExtendTriggered ? 'Interest-only payment triggered auto-extension' : 'No auto-extension',
         newPrincipal: paymentResult.newPrincipal.toFixed(2),
         newInterestAmount: paymentResult.newInterestAmount.toFixed(2),
         newRemainingBalance: paymentResult.finalRemainingBalance.toFixed(2),
-        dueDateExtended: paymentResult.dueDateExtended,
         newDueDate: paymentResult.newDueDate,
-        newStatus: paymentResult.newStatus
+        newStatus: paymentResult.newStatus,
+        interestPaidThisCycle: paymentResult.newInterestPaidThisCycle.toFixed(2),
+        extendedThisCycle: paymentResult.newExtendedThisCycle
       }
     });
   } catch (err) {
+    if (client) {
+      try {
+        await client.query('ROLLBACK');
+      } catch (rollbackErr) {
+        console.error('Error rolling back transaction:', rollbackErr);
+      }
+    }
     console.error('❌ Error making payment:', err);
     res.status(500).json({ message: 'Error making payment', error: err.message });
+  } finally {
+    if (client) {
+      client.release();
+    }
   }
 });
 
@@ -3438,10 +3461,12 @@ app.get('/customers/:customerId/loans/search', async (req, res) => {
 });
 
 // MAKE PAYMENT FOR CUSTOMER LOAN - POST /customers/:customerId/loans/:loanId/payment
+// Implements auto-extend business rule: extend due date by 1 month when interest-only payment made before/on due date
 app.post('/customers/:customerId/loans/:loanId/payment', authenticateToken, requireActiveShift, async (req, res) => {
   const { customerId, loanId } = req.params;
   const { paymentMethod, paymentAmount, userId } = req.body;
 
+  let client;
   try {
     const customerIdNum = parseInt(customerId, 10);
     const loanIdNum = parseInt(loanId, 10);
@@ -3455,36 +3480,44 @@ app.post('/customers/:customerId/loans/:loanId/payment', authenticateToken, requ
       return res.status(400).json({ message: 'Valid payment amount is required' });
     }
 
+    // Use transaction for safety
+    client = await pool.connect();
+    await client.query('BEGIN');
+
     // Verify customer exists
-    const customerCheck = await pool.query('SELECT * FROM customers WHERE id = $1', [customerIdNum]);
+    const customerCheck = await client.query('SELECT * FROM customers WHERE id = $1', [customerIdNum]);
     if (customerCheck.rows.length === 0) {
+      await client.query('ROLLBACK');
       return res.status(404).json({ message: 'Customer not found' });
     }
 
-    // Fetch the loan and verify it belongs to the customer
-    const loanResult = await pool.query('SELECT * FROM loans WHERE id = $1 AND customer_id = $2', [loanIdNum, customerIdNum]);
+    // Fetch the loan and verify it belongs to the customer (with row locking)
+    const loanResult = await client.query(
+      'SELECT * FROM loans WHERE id = $1 AND customer_id = $2 FOR UPDATE',
+      [loanIdNum, customerIdNum]
+    );
     const loan = loanResult.rows[0];
 
     if (!loan) {
+      await client.query('ROLLBACK');
       return res.status(404).json({ message: 'Loan not found for this customer' });
     }
 
     const payment = parseFloat(paymentAmount);
     const method = paymentMethod || 'cash';
+    const paymentDate = new Date();
 
-    // Use the new interest capitalization payment processing
-    const paymentResult = processPaymentWithCapitalization(loan, payment, payment);
+    console.log(`\n💳 AUTO-EXTEND PAYMENT ENDPOINT - Loan ${loanIdNum}, Payment: $${payment.toFixed(2)}`);
 
-    console.log(`\n📊 PAYMENT RESULT FOR LOAN ${loanIdNum}:`);
-    console.log(`   New Principal: $${paymentResult.newPrincipal.toFixed(2)}`);
-    console.log(`   New Interest: $${paymentResult.newInterestAmount.toFixed(2)}`);
-    console.log(`   New Remaining Balance: $${paymentResult.finalRemainingBalance.toFixed(2)}`);
-    console.log(`   Interest Capitalized: ${paymentResult.interestCapitalized}`);
-    console.log(`   Due Date Extended: ${paymentResult.dueDateExtended}`);
-    console.log(`   New Due Date: ${paymentResult.newDueDate}`);
+    // Process payment with auto-extend logic
+    const paymentResult = processPaymentWithAutoExtend(loan, payment, paymentDate);
 
-    // Update the loan with new calculated values
-    const updatedLoanResult = await pool.query(
+    console.log(`   Auto-extend triggered: ${paymentResult.autoExtendTriggered}`);
+    console.log(`   New due date: ${paymentResult.newDueDate}`);
+    console.log(`   New remaining balance: $${paymentResult.finalRemainingBalance.toFixed(2)}`);
+
+    // Update the loan with new calculated values using transaction
+    const updatedLoanResult = await client.query(
       `UPDATE loans SET 
         loan_amount = $1,
         remaining_balance = $2, 
@@ -3492,8 +3525,11 @@ app.post('/customers/:customerId/loans/:loanId/payment', authenticateToken, requ
         due_date = $4, 
         status = $5,
         total_payable_amount = $6,
+        interest_paid_this_cycle = $7,
+        extended_this_cycle = $8,
+        last_extended_at = CASE WHEN $8 = true THEN CURRENT_TIMESTAMP ELSE last_extended_at END,
         updated_at = CURRENT_TIMESTAMP
-       WHERE id = $7 RETURNING *`,
+       WHERE id = $9 RETURNING *`,
       [
         paymentResult.newPrincipal,
         paymentResult.finalRemainingBalance,
@@ -3501,17 +3537,22 @@ app.post('/customers/:customerId/loans/:loanId/payment', authenticateToken, requ
         paymentResult.newDueDate,
         paymentResult.newStatus,
         paymentResult.finalRemainingBalance,
+        paymentResult.newInterestPaidThisCycle,
+        paymentResult.newExtendedThisCycle,
         loanIdNum
       ]
     );
 
-    // Insert payment history
-    const paymentHistoryResult = await pool.query(
+    // Insert payment history within same transaction
+    const paymentHistoryResult = await client.query(
       'INSERT INTO payment_history (loan_id, payment_method, payment_amount, payment_date, created_by) VALUES ($1, $2, $3, CURRENT_TIMESTAMP, $4) RETURNING *',
       [loanIdNum, method, payment, userId || null]
     );
 
-    // Generate receipt PDF
+    // Commit transaction
+    await client.query('COMMIT');
+
+    // Generate receipt PDF (outside transaction)
     let receiptPDF = null;
     try {
       const updatedLoan = updatedLoanResult.rows[0];
@@ -3523,14 +3564,12 @@ app.post('/customers/:customerId/loans/:loanId/payment', authenticateToken, requ
     }
 
     // Build response based on result
-    let responseMessage = 'Payment successfully processed!';
+    let responseMessage = paymentResult.message || 'Payment successfully processed!';
     
     if (paymentResult.finalRemainingBalance === 0) {
       responseMessage = '🎉 Loan fully paid off and automatically redeemed!';
-    } else if (paymentResult.interestCapitalized) {
-      responseMessage = `✅ Payment applied! Interest capitalized and added to principal. Due date extended to ${paymentResult.newDueDate}.`;
-    } else if (paymentResult.dueDateExtended && !paymentResult.interestCapitalized) {
-      responseMessage = `✅ Payment applied. Due date extended to ${paymentResult.newDueDate}.`;
+    } else if (paymentResult.autoExtendTriggered) {
+      responseMessage = `✅ ${paymentResult.message}`;
     }
 
     const loanWithInterest = {
@@ -3538,46 +3577,38 @@ app.post('/customers/:customerId/loans/:loanId/payment', authenticateToken, requ
       interest_amount: ensureInterestAmount(updatedLoanResult.rows[0])
     };
 
-    if (paymentResult.finalRemainingBalance === 0) {
-      res.status(200).json({
-        message: responseMessage,
-        loan: validators.formatLoanResponse(loanWithInterest),
-        paymentHistory: paymentHistoryResult.rows[0],
-        receiptPDF: receiptPDF,
-        paymentDetails: {
-          paymentAmount: payment.toFixed(2),
-          interestCapitalized: paymentResult.interestCapitalized,
-          capitalizedAmount: paymentResult.interestCapitalized ? parseFloat(loan.interest_amount).toFixed(2) : null,
-          newPrincipal: paymentResult.newPrincipal.toFixed(2),
-          newInterestAmount: paymentResult.newInterestAmount.toFixed(2),
-          newRemainingBalance: paymentResult.finalRemainingBalance.toFixed(2),
-          dueDateExtended: paymentResult.dueDateExtended,
-          newDueDate: paymentResult.newDueDate,
-          newStatus: paymentResult.newStatus
-        }
-      });
-    } else {
-      res.status(200).json({
-        message: responseMessage,
-        loan: validators.formatLoanResponse(loanWithInterest),
-        paymentHistory: paymentHistoryResult.rows[0],
-        receiptPDF: receiptPDF,
-        paymentDetails: {
-          paymentAmount: payment.toFixed(2),
-          interestCapitalized: paymentResult.interestCapitalized,
-          capitalizedAmount: paymentResult.interestCapitalized ? parseFloat(loan.interest_amount).toFixed(2) : null,
-          newPrincipal: paymentResult.newPrincipal.toFixed(2),
-          newInterestAmount: paymentResult.newInterestAmount.toFixed(2),
-          newRemainingBalance: paymentResult.finalRemainingBalance.toFixed(2),
-          dueDateExtended: paymentResult.dueDateExtended,
-          newDueDate: paymentResult.newDueDate,
-          newStatus: paymentResult.newStatus
-        }
-      });
-    }
+    res.status(200).json({
+      message: responseMessage,
+      loan: validators.formatLoanResponse(loanWithInterest),
+      paymentHistory: paymentHistoryResult.rows[0],
+      receiptPDF: receiptPDF,
+      paymentDetails: {
+        paymentAmount: payment.toFixed(2),
+        autoExtendTriggered: paymentResult.autoExtendTriggered,
+        autoExtendMessage: paymentResult.autoExtendTriggered ? 'Interest-only payment triggered auto-extension' : 'No auto-extension',
+        newPrincipal: paymentResult.newPrincipal.toFixed(2),
+        newInterestAmount: paymentResult.newInterestAmount.toFixed(2),
+        newRemainingBalance: paymentResult.finalRemainingBalance.toFixed(2),
+        newDueDate: paymentResult.newDueDate,
+        newStatus: paymentResult.newStatus,
+        interestPaidThisCycle: paymentResult.newInterestPaidThisCycle.toFixed(2),
+        extendedThisCycle: paymentResult.newExtendedThisCycle
+      }
+    });
   } catch (err) {
+    if (client) {
+      try {
+        await client.query('ROLLBACK');
+      } catch (rollbackErr) {
+        console.error('Error rolling back transaction:', rollbackErr);
+      }
+    }
     console.error('Error making payment:', err);
     res.status(500).json({ message: 'Error making payment', error: err.message });
+  } finally {
+    if (client) {
+      client.release();
+    }
   }
 });
 
