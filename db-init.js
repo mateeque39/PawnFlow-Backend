@@ -280,11 +280,18 @@ async function retroactiveExtendLoans(pool) {
     
     // Start explicit transaction
     await client.query('BEGIN');
+    
+    // IMPORTANT: Reset extended_this_cycle flag for all loans before checking
+    // This ensures we check ALL active loans, even if they were extended by interest capitalization
+    console.log('   🔄 Resetting extension flags for fresh check...');
+    await client.query(
+      `UPDATE loans SET extended_this_cycle = false WHERE status = 'active'`
+    );
 
-    // Get all active loans that haven't been extended yet
+    // Get all active loans to check for extension
     const loansResult = await client.query(
       `SELECT * FROM loans 
-       WHERE status = 'active' AND (extended_this_cycle = false OR extended_this_cycle IS NULL)
+       WHERE status = 'active'
        ORDER BY id ASC`
     );
 
