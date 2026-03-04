@@ -393,10 +393,12 @@ async function retroactiveExtendLoans(pool) {
           const formattedNewDueDate = newDueDate.toISOString().split('T')[0];
 
           // Update the loan with properly formatted date using POOL
+          console.log(`      [DEBUG] Updating with formattedNewDueDate="${formattedNewDueDate}" (type: ${typeof formattedNewDueDate})`);
+          
           const updateResult = await pool.query(
             `UPDATE loans 
              SET 
-               due_date = $1::DATE,
+               due_date = TO_DATE($1, 'YYYY-MM-DD'),
                extended_this_cycle = true,
                last_extended_at = CURRENT_TIMESTAMP,
                updated_at = CURRENT_TIMESTAMP
