@@ -384,22 +384,14 @@ async function retroactiveExtendLoans(pool) {
         if (hasPayments && totalPaid >= requiredInterest) {
           console.log(`      ✓ Qualifies for extension`);
           
-          // Calculate new due date (add 1 month)
-          const currentDueDate = new Date(loan.due_date);
-          const newDueDate = new Date(currentDueDate);
-          newDueDate.setMonth(newDueDate.getMonth() + 1);
+          // Use PostgreSQL to add 1 month to current due_date
+          // This avoids any JavaScript timezone issues
+          console.log(`      [DEBUG] Using PostgreSQL to extend due_date by 1 month from ${loan.due_date}`);
           
-          // Format date as YYYY-MM-DD for PostgreSQL
-          const formattedNewDueDate = newDueDate.toISOString().split('T')[0];
-
-          // Update the loan with properly formatted date using POOL
-          // Use TWO separate UPDATE statements to isolate any multi-column issues
-          console.log(`      [DEBUG] Updating with formattedNewDueDate="${formattedNewDueDate}" (type: ${typeof formattedNewDueDate})`);
-          
-          // STEP 1: Update due_date (like the working test endpoint)
+          // STEP 1: Update due_date using PostgreSQL date arithmetic (adds 1 month in database)
           const updateResult = await pool.query(
-            `UPDATE loans SET due_date = TO_DATE($1, 'YYYY-MM-DD'), updated_at = CURRENT_TIMESTAMP WHERE id = $2 RETURNING id, due_date`,
-            [formattedNewDueDate, loan.id]
+            `UPDATE loans SET due_date = due_date + INTERVAL '1 month', updated_at = CURRENT_TIMESTAMP WHERE id = $1 RETURNING id, due_date`,
+            [loan.id]
           );
 
           console.log(`      [UPDATE DUE_DATE] Query returned ${updateResult.rows.length} rows`);
@@ -409,7 +401,7 @@ async function retroactiveExtendLoans(pool) {
             const updatedLoan = updateResult.rows[0];
             
             // Log what the RETURNING clause gave us
-            console.log(`      [RETURNING] due_date="${updatedLoan.due_date}" (expected: "${formattedNewDueDate}")`);
+            console.log(`      [RETURNING] due_date="${updatedLoan.due_date}"`);
             
             // STEP 2: Update extended_this_cycle flag separately
             const flagResult = await pool.query(
@@ -429,16 +421,18 @@ async function retroactiveExtendLoans(pool) {
             
             if (verifyResult.rows.length > 0) {
               const verified = verifyResult.rows[0];
-              const verifyDueDate = new Date(verified.due_date);
-              const expectedDueDate = new Date(`${formattedNewDueDate}T00:00:00Z`);
-              const datesMatch = verifyDueDate.toISOString().split('T')[0] === formattedNewDueDate;
+              const originalDate = new Date(loan.due_date).toISOString().split('T')[0];
+              const updatedDate = new Date(updatedLoan.due_date).toISOString().split('T')[0];
+              const verifiedDate = new Date(verified.due_date).toISOString().split('T')[0];
               
-              console.log(`  ✅ Loan #${loan.id}: Extended from ${loan.due_date} to ${updatedLoan.due_date}`);
-              console.log(`      ✓ Setting: due_date=${formattedNewDueDate}, extended=true, updated_at=NOW()`);
-              console.log(`      ✓ Verified in DB: due_date=${verified.due_date}, extended=${verified.extended_this_cycle}`);
+              // Check if the date was actually extended (should be 1 month later)
+              const datesMatch = updatedDate === verifiedDate;
+              
+              console.log(`  ✅ Loan #${loan.id}: Extended from ${originalDate} to ${updatedDate}`);
+              console.log(`      ✓ Verified in DB: due_date=${verifiedDate}, extended=${verified.extended_this_cycle}`);
               console.log(`      ✓ Date match check: ${datesMatch ? '✅ YES' : '❌ NO - DATES DO NOT MATCH!'}`);
               if (!datesMatch) {
-                console.error(`      🚨 CRITICAL: Expected ${formattedNewDueDate} but got ${verifyDueDate.toISOString().split('T')[0]}`);
+                console.error(`      🚨 CRITICAL: Expected ${updatedDate} but got ${verifiedDate}`);
               }
               console.log(`      (Paid: $${totalPaid.toFixed(2)} interest, Required: $${requiredInterest.toFixed(2)})`);
             }
