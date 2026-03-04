@@ -277,11 +277,14 @@ async function retroactiveExtendLoans(pool) {
 
   try {
     console.log('\n🔄 Checking for loans to retroactively extend...');
+    
+    // Start explicit transaction
+    await client.query('BEGIN');
 
     // Get all active loans that haven't been extended yet
     const loansResult = await client.query(
       `SELECT * FROM loans 
-       WHERE status = 'active' AND extended_this_cycle = false
+       WHERE status = 'active' AND (extended_this_cycle = false OR extended_this_cycle IS NULL)
        ORDER BY id ASC`
     );
 
@@ -289,6 +292,7 @@ async function retroactiveExtendLoans(pool) {
     
     if (loans.length === 0) {
       console.log('⏭️  No loans need retroactive extension');
+      await client.query('COMMIT');
       return 0;
     }
 
@@ -316,22 +320,31 @@ async function retroactiveExtendLoans(pool) {
           const currentDueDate = new Date(loan.due_date);
           const newDueDate = new Date(currentDueDate);
           newDueDate.setMonth(newDueDate.getMonth() + 1);
+          
+          // Format date as YYYY-MM-DD for PostgreSQL
+          const formattedNewDueDate = newDueDate.toISOString().split('T')[0];
 
-          // Update the loan
-          await client.query(
+          // Update the loan with properly formatted date
+          const updateResult = await client.query(
             `UPDATE loans 
              SET 
-               due_date = $1,
+               due_date = $1::DATE,
                extended_this_cycle = true,
                last_extended_at = CURRENT_TIMESTAMP,
                updated_at = CURRENT_TIMESTAMP
-             WHERE id = $2`,
-            [newDueDate, loan.id]
+             WHERE id = $2
+             RETURNING id, due_date, extended_this_cycle`,
+            [formattedNewDueDate, loan.id]
           );
 
-          extendedCount++;
-          console.log(`  ✅ Loan #${loan.id}: Extended from ${loan.due_date} to ${newDueDate.toISOString().split('T')[0]}`);
-          console.log(`      (Paid: $${totalPaid.toFixed(2)} interest, Required: $${requiredInterest.toFixed(2)})`);
+          if (updateResult.rows.length > 0) {
+            extendedCount++;
+            const updatedLoan = updateResult.rows[0];
+            console.log(`  ✅ Loan #${loan.id}: Extended from ${loan.due_date} to ${updatedLoan.due_date}`);
+            console.log(`      (Paid: $${totalPaid.toFixed(2)} interest, Required: $${requiredInterest.toFixed(2)})`);
+          } else {
+            console.log(`  ❌ Loan #${loan.id}: Update failed - loan not found`);
+          }
         }
       } catch (loanErr) {
         console.error(`  ❌ Error processing Loan #${loan.id}:`, loanErr.message);
@@ -342,9 +355,16 @@ async function retroactiveExtendLoans(pool) {
       console.log(`\n✅ Retroactively extended ${extendedCount} loans`);
     }
 
+    // Commit transaction
+    await client.query('COMMIT');
     return extendedCount;
   } catch (error) {
     console.error('❌ Retroactive extension check failed:', error.message);
+    try {
+      await client.query('ROLLBACK');
+    } catch (rollbackErr) {
+      console.error('Error rolling back transaction:', rollbackErr.message);
+    }
     return 0;
   } finally {
     client.release();
