@@ -305,33 +305,58 @@ async function retroactiveExtendLoans(pool) {
       try {
         console.log(`  📍 Checking Loan #${loan.id}: Principal $${loan.loan_amount}, Interest $${loan.interest_amount}`);
         
-        // First get all payment records for debugging
-        const allPaymentsResult = await client.query(
-          `SELECT payment_amount, payment_date, payment_method FROM payment_history WHERE loan_id = $1 ORDER BY payment_date`,
-          [loan.id]
-        );
-        console.log(`      Raw payments found: ${allPaymentsResult.rows.length} records`);
-        if (allPaymentsResult.rows.length > 0) {
-          allPaymentsResult.rows.forEach(p => {
-            console.log(`        - $${p.payment_amount} on ${p.payment_date} (${p.payment_method})`);
-          });
-        }
-        
-        // Get payment history for this loan
+        // Check BOTH payment_history AND payments tables (might have data in either)
         const paymentHistoryResult = await client.query(
-          `SELECT SUM(CAST(payment_amount AS NUMERIC)) as total_paid, COUNT(*) as payment_count
+          `SELECT SUM(CAST(payment_amount AS NUMERIC)) as total_paid_ph, COUNT(*) as payment_count_ph
            FROM payment_history 
            WHERE loan_id = $1`,
           [loan.id]
         );
+        
+        const paymentsResult = await client.query(
+          `SELECT SUM(CAST(payment_amount AS NUMERIC)) as total_paid_p, COUNT(*) as payment_count_p
+           FROM payments 
+           WHERE loan_id = $1`,
+          [loan.id]
+        );
 
-        const totalPaid = parseFloat(paymentHistoryResult.rows[0]?.total_paid || 0);
-        const hasPayments = parseInt(paymentHistoryResult.rows[0]?.payment_count || 0) > 0;
+        const totalFromHistory = parseFloat(paymentHistoryResult.rows[0]?.total_paid_ph || 0);
+        const countFromHistory = parseInt(paymentHistoryResult.rows[0]?.payment_count_ph || 0);
+        
+        const totalFromPayments = parseFloat(paymentsResult.rows[0]?.total_paid_p || 0);
+        const countFromPayments = parseInt(paymentsResult.rows[0]?.payment_count_p || 0);
+        
+        const totalPaid = totalFromHistory + totalFromPayments;
+        const hasPayments = countFromHistory > 0 || countFromPayments > 0;
+        
+        console.log(`      payment_history: ${countFromHistory} records, $${totalFromHistory.toFixed(2)}`);
+        console.log(`      payments table: ${countFromPayments} records, $${totalFromPayments.toFixed(2)}`);
+        
+        // Get first sample from both tables for debugging
+        if (countFromHistory > 0) {
+          const samplePH = await client.query(
+            `SELECT payment_amount, payment_date FROM payment_history WHERE loan_id = $1 LIMIT 3`,
+            [loan.id]
+          );
+          samplePH.rows.forEach(p => {
+            console.log(`        [history] - $${p.payment_amount} on ${p.payment_date}`);
+          });
+        }
+        
+        if (countFromPayments > 0) {
+          const sampleP = await client.query(
+            `SELECT payment_amount, payment_date FROM payments WHERE loan_id = $1 LIMIT 3`,
+            [loan.id]
+          );
+          sampleP.rows.forEach(p => {
+            console.log(`        [payments] - $${p.payment_amount} on ${p.payment_date}`);
+          });
+        }
 
         // Check if total paid >= required interest amount
         const requiredInterest = parseFloat(loan.interest_amount || 0);
         
-        console.log(`      Payments: ${paymentHistoryResult.rows[0]?.payment_count || 0}, Total Paid: $${totalPaid.toFixed(2)}, Required: $${requiredInterest.toFixed(2)}`);
+        console.log(`      Total Paid (both tables): $${totalPaid.toFixed(2)}, Required: $${requiredInterest.toFixed(2)}`);
         
         if (hasPayments && totalPaid >= requiredInterest) {
           console.log(`      ✓ Qualifies for extension`);
@@ -366,7 +391,7 @@ async function retroactiveExtendLoans(pool) {
             console.log(`  ❌ Loan #${loan.id}: Update failed - loan not found`);
           }
         } else {
-          console.log(`      ⏭️  Skipped: hasPayments=${hasPayments}, totalPaid>= required=${totalPaid >= requiredInterest}`);
+          console.log(`      ⏭️  Skipped: hasPayments=${hasPayments}, totalPaid >= required=${totalPaid >= requiredInterest}`);
         }
       } catch (loanErr) {
         console.error(`  ❌ Error processing Loan #${loan.id}:`, loanErr.message);
