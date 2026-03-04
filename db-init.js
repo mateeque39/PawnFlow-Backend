@@ -272,21 +272,19 @@ COMMENT ON COLUMN loans.zipcode IS 'Customer postal/zip code';
  * @returns {Promise<number>} - Number of loans extended
  */
 async function retroactiveExtendLoans(pool) {
-  const client = await pool.connect();
   let extendedCount = 0;
 
   try {
     console.log('\n🔄 Checking for loans to retroactively extend...');
 
     // Reset extended_this_cycle flag for all loans before checking
-    // This ensures we check ALL active loans, even if they were extended by interest capitalization
     console.log('   🔄 Resetting extension flags for fresh check...');
-    await client.query(
+    await pool.query(
       `UPDATE loans SET extended_this_cycle = false WHERE status = 'active'`
     );
 
-    // Get all active loans to check for extension
-    const loansResult = await client.query(
+    // Get all active loans to check for extension (using pool directly)
+    const loansResult = await pool.query(
       `SELECT * FROM loans 
        WHERE status = 'active'
        ORDER BY id ASC`
@@ -308,22 +306,22 @@ async function retroactiveExtendLoans(pool) {
       try {
         console.log(`  📍 Checking Loan #${loan.id}: Principal $${loan.loan_amount}, Interest $${loan.interest_amount}`);
         
-        // Check ALL THREE payment tables (payment_history, payments, loan_payments)
-        const paymentHistoryResult = await client.query(
+        // Check ALL THREE payment tables using pool
+        const paymentHistoryResult = await pool.query(
           `SELECT SUM(CAST(payment_amount AS NUMERIC)) as total_paid_ph, COUNT(*) as payment_count_ph
            FROM payment_history 
            WHERE loan_id = $1`,
           [loan.id]
         );
         
-        const paymentsResult = await client.query(
+        const paymentsResult = await pool.query(
           `SELECT SUM(CAST(payment_amount AS NUMERIC)) as total_paid_p, COUNT(*) as payment_count_p
            FROM payments 
            WHERE loan_id = $1`,
           [loan.id]
         );
         
-        const loanPaymentsResult = await client.query(
+        const loanPaymentsResult = await pool.query(
           `SELECT SUM(CAST(amount_paid AS NUMERIC)) as total_paid_lp, COUNT(*) as payment_count_lp
            FROM loan_payments 
            WHERE loan_id = $1`,
@@ -348,7 +346,7 @@ async function retroactiveExtendLoans(pool) {
         
         // Get sample records for debugging
         if (countFromHistory > 0) {
-          const samplePH = await client.query(
+          const samplePH = await pool.query(
             `SELECT payment_amount, payment_date FROM payment_history WHERE loan_id = $1 LIMIT 1`,
             [loan.id]
           );
@@ -358,7 +356,7 @@ async function retroactiveExtendLoans(pool) {
         }
         
         if (countFromPayments > 0) {
-          const sampleP = await client.query(
+          const sampleP = await pool.query(
             `SELECT payment_amount, payment_date FROM payments WHERE loan_id = $1 LIMIT 1`,
             [loan.id]
           );
@@ -368,7 +366,7 @@ async function retroactiveExtendLoans(pool) {
         }
         
         if (countFromLoanPayments > 0) {
-          const sampleLP = await client.query(
+          const sampleLP = await pool.query(
             `SELECT amount_paid, payment_date FROM loan_payments WHERE loan_id = $1 LIMIT 1`,
             [loan.id]
           );
@@ -393,8 +391,8 @@ async function retroactiveExtendLoans(pool) {
           // Format date as YYYY-MM-DD for PostgreSQL
           const formattedNewDueDate = newDueDate.toISOString().split('T')[0];
 
-          // Update the loan with properly formatted date
-          const updateResult = await client.query(
+          // Update the loan with properly formatted date using POOL
+          const updateResult = await pool.query(
             `UPDATE loans 
              SET 
                due_date = $1::DATE,
@@ -411,9 +409,20 @@ async function retroactiveExtendLoans(pool) {
           if (updateResult.rows.length > 0) {
             extendedCount++;
             const updatedLoan = updateResult.rows[0];
-            console.log(`  ✅ Loan #${loan.id}: Extended from ${loan.due_date} to ${updatedLoan.due_date}`);
-            console.log(`      ✓ Setting: due_date=${formattedNewDueDate}, extended=true, updated_at=NOW()`);
-            console.log(`      (Paid: $${totalPaid.toFixed(2)} interest, Required: $${requiredInterest.toFixed(2)})`);
+            
+            // Verify the update actually persisted by reading it back
+            const verifyResult = await pool.query(
+              'SELECT due_date, extended_this_cycle FROM loans WHERE id = $1',
+              [loan.id]
+            );
+            
+            if (verifyResult.rows.length > 0) {
+              const verified = verifyResult.rows[0];
+              console.log(`  ✅ Loan #${loan.id}: Extended from ${loan.due_date} to ${updatedLoan.due_date}`);
+              console.log(`      ✓ Setting: due_date=${formattedNewDueDate}, extended=true, updated_at=NOW()`);
+              console.log(`      ✓ Verified in DB: due_date=${verified.due_date}, extended=${verified.extended_this_cycle}`);
+              console.log(`      (Paid: $${totalPaid.toFixed(2)} interest, Required: $${requiredInterest.toFixed(2)})`);
+            }
           } else {
             console.log(`  ❌ Loan #${loan.id}: UPDATE returned 0 rows - possibly already updated`);
           }
@@ -435,8 +444,6 @@ async function retroactiveExtendLoans(pool) {
     console.error('❌ Retroactive extension check failed:', error.message);
     console.error('Error details:', error);
     return 0;
-  } finally {
-    client.release();
   }
 }
 
