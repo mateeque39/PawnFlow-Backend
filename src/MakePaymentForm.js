@@ -109,30 +109,51 @@ const MakePaymentForm = ({ loggedInUser }) => {
         redemptionFee: (willFullyPay && redemptionFee) ? parseFloat(redemptionFee) : undefined
       });
 
-      // Build success message with due date update info
-      let successMsg = "Payment successful! New receipt generated with updated due date.";
-      if (response.dueDateExtended) {
-        const oldDate = new Date(loan.due_date);
-        const newDate = new Date(oldDate);
-        newDate.setDate(newDate.getDate() + 30);
-        successMsg = `✅ Payment successful! Interest paid - Due date automatically extended from ${oldDate.toLocaleDateString()} to ${newDate.toLocaleDateString()}. New receipt ready.`;
+      // Build success message with auto-extension info
+      let successMsg = "✅ Payment successfully processed!";
+      
+      // Check if auto-extension was triggered
+      if (response.paymentDetails?.autoExtendTriggered) {
+        const oldDate = new Date(response.paymentDetails.newDueDate);
+        // The oldDate now is actually the new due date after extension
+        // We need to calculate what the previous due date was
+        const previousDate = new Date(oldDate);
+        previousDate.setMonth(previousDate.getMonth() - 1);
+        
+        successMsg = `🎯 Auto-Extension Triggered!\n\n` +
+          `✓ Payment: $${parseFloat(paymentAmount).toFixed(2)}\n` +
+          `✓ Interest-only payment recognized\n` +
+          `✓ Due date extended from ${previousDate.toLocaleDateString()} → ${oldDate.toLocaleDateString()}\n` +
+          `✓ New interest: $${response.paymentDetails.newInterestAmount} charged for next cycle\n` +
+          `✓ Principal: $${response.paymentDetails.newPrincipal} (unchanged)\n\n` +
+          `📨 Receipt PDF with updated details is ready!`;
+        setLoanDueDateExtended(true);
+      } else if (response.loan?.remaining_balance === 0) {
+        successMsg = "🎉 Payment successful! Loan is now fully paid and automatically redeemed!";
+      } else {
+        successMsg = `✅ Payment of $${parseFloat(paymentAmount).toFixed(2)} successfully applied.\n` +
+          `📊 New remaining balance: $${response.loan?.remaining_balance?.toFixed(2) || 0}`;
       }
+      
       setMessage(successMsg);
 
-      // Update loan details with new remaining balance
-      setLoan(response.loan);
+      // Refetch loan data to get updated information
+      const updatedLoanResponse = await http.get(`/customers/${loan.customer_id}/loans/${loan.id}`);
+      if (updatedLoanResponse?.loan) {
+        setLoan(updatedLoanResponse.loan);
+      } else {
+        // Fallback: update with response loan data
+        setLoan(response.loan);
+      }
 
       // Add new payment record to history
-      setPaymentHistory([response.paymentHistory, ...paymentHistory]);
+      if (response.paymentHistory) {
+        setPaymentHistory([response.paymentHistory, ...paymentHistory]);
+      }
 
       // Store receipt PDF if available
       if (response.receiptPDF) {
         setReceiptPDF(response.receiptPDF);
-      }
-
-      // Check if loan is fully paid
-      if (response.loan.remaining_balance === 0) {
-        setMessage("🎉 Loan is now fully paid and automatically redeemed!");
       }
 
       setPaymentAmount("");
@@ -179,6 +200,17 @@ const MakePaymentForm = ({ loggedInUser }) => {
               <p><strong>Loan Amount:</strong> $ {loan.loan_amount}</p>
               <p><strong>Total Payable:</strong> $ {loan.total_payable_amount}</p>
               <p><strong>Remaining Balance:</strong> $ {loan.remaining_balance}</p>
+              <p><strong>Due Date:</strong> {new Date(loan.due_date).toLocaleDateString()} {loan.extended_this_cycle && <span style={{ color: '#dc3545', fontWeight: 'bold' }}>⏰ (Extended)</span>}</p>
+              <p><strong>Interest Rate:</strong> {loan.interest_rate}%</p>
+              <p><strong>Interest Amount:</strong> $ {loan.interest_amount}</p>
+              {loan.interest_paid_this_cycle !== undefined && (
+                <p><strong>Interest Paid This Cycle:</strong> $ {parseFloat(loan.interest_paid_this_cycle || 0).toFixed(2)}</p>
+              )}
+              {loan.extended_this_cycle && (
+                <p style={{ color: '#28a745', fontWeight: 'bold', gridColumn: '1 / -1' }}>
+                  ✓ Due date has been extended this cycle (no further extensions allowed)
+                </p>
+              )}
             </div>
           </div>
 

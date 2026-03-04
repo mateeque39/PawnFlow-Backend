@@ -654,6 +654,9 @@ const ViewCustomerLoansForm = ({ loggedInUser }) => {
                     <p style={{ margin: '0', fontSize: '12px', color: '#333', fontWeight: '600' }}>Due Date</p>
                     <p style={{ margin: '5px 0 0 0', fontSize: '14px', color: '#222', fontWeight: '600' }}>
                       {formatDateString(loan.dueDate)}
+                      {loan.extended_this_cycle && (
+                        <span style={{ color: '#dc3545', marginLeft: '8px', fontWeight: 'bold' }}>⏰ Extended</span>
+                      )}
                     </p>
                   </div>
                   {activeTab === 'overdue' && loan.daysOverdue !== undefined && (
@@ -661,6 +664,14 @@ const ViewCustomerLoansForm = ({ loggedInUser }) => {
                       <p style={{ margin: '0', fontSize: '12px', color: '#333', fontWeight: '600' }}>Days Overdue</p>
                       <p style={{ margin: '5px 0 0 0', fontSize: '16px', fontWeight: 'bold', color: '#d32f2f' }}>
                         ⚠️ {loan.daysOverdue} days
+                      </p>
+                    </div>
+                  )}
+                  {loan.extended_this_cycle && (
+                    <div>
+                      <p style={{ margin: '0', fontSize: '12px', color: '#333', fontWeight: '600' }}>Interest Paid This Cycle</p>
+                      <p style={{ margin: '5px 0 0 0', fontSize: '14px', fontWeight: 'bold', color: '#28a745' }}>
+                        ${(loan.interest_paid_this_cycle || 0).toFixed(2)}
                       </p>
                     </div>
                   )}
