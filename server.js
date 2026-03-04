@@ -3362,10 +3362,11 @@ app.get('/customers/:customerId/loans', async (req, res) => {
     console.log(`🎯 Customer ${customerIdNum} loans summary: active=${activeLoans.length}, overdue=${overdueLoans.length}, redeemed=${redeemedLoans.length}, forfeited=${forfeitedLoans.length}`);
 
     // Debug log for loans 8, 9, 11 to verify due dates in API response
+    console.log(`📤 Backend API Response for Customer ${customerIdNum}:`);
     [8, 9, 11].forEach(loanId => {
       const loan = loans.find(l => l.id === loanId);
       if (loan) {
-        console.log(`📤 API Response for Loan #${loanId}: due_date=${loan.due_date}, extended_this_cycle=${loan.extended_this_cycle}`);
+        console.log(`  Loan #${loanId}: due_date=${loan.due_date}, extended_this_cycle=${loan.extended_this_cycle}`);
       }
     });
 
