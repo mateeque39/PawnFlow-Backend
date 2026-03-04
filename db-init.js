@@ -410,13 +410,16 @@ async function retroactiveExtendLoans(pool) {
             [formattedNewDueDate, loan.id]
           );
 
+          console.log(`      [UPDATE] Query returned ${updateResult.rows.length} rows`);
+          
           if (updateResult.rows.length > 0) {
             extendedCount++;
             const updatedLoan = updateResult.rows[0];
             console.log(`  ✅ Loan #${loan.id}: Extended from ${loan.due_date} to ${updatedLoan.due_date}`);
+            console.log(`      ✓ Setting: due_date=${formattedNewDueDate}, extended=true, updated_at=NOW()`);
             console.log(`      (Paid: $${totalPaid.toFixed(2)} interest, Required: $${requiredInterest.toFixed(2)})`);
           } else {
-            console.log(`  ❌ Loan #${loan.id}: Update failed - loan not found`);
+            console.log(`  ❌ Loan #${loan.id}: UPDATE returned 0 rows - possibly already updated`);
           }
         } else {
           console.log(`      ⏭️  Skipped: hasPayments=${hasPayments}, totalPaid >= required=${totalPaid >= requiredInterest}`);
@@ -430,13 +433,24 @@ async function retroactiveExtendLoans(pool) {
       console.log(`\n✅ Retroactively extended ${extendedCount} loans`);
     }
 
-    // Commit transaction
-    await client.query('COMMIT');
+    // Commit transaction with verification
+    try {
+      console.log('   💾 Committing transaction...');
+      const commitResult = await client.query('COMMIT');
+      console.log('   ✅ Transaction committed successfully');
+    } catch (commitErr) {
+      console.error('   ❌ COMMIT failed:', commitErr.message);
+      throw commitErr;
+    }
+    
     return extendedCount;
   } catch (error) {
     console.error('❌ Retroactive extension check failed:', error.message);
+    console.error('Error details:', error);
     try {
+      console.log('   🔄 Rolling back transaction...');
       await client.query('ROLLBACK');
+      console.log('   ✅ Transaction rolled back');
     } catch (rollbackErr) {
       console.error('Error rolling back transaction:', rollbackErr.message);
     }
