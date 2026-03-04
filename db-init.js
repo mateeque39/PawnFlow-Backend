@@ -413,17 +413,31 @@ async function retroactiveExtendLoans(pool) {
             extendedCount++;
             const updatedLoan = updateResult.rows[0];
             
-            // Verify the update actually persisted by reading it back
+            // Log what the RETURNING clause gave us
+            console.log(`      [RETURNING] due_date="${updatedLoan.due_date}" (expected: "${formattedNewDueDate}")`);
+            
+            // Wait a moment to ensure write is flushed
+            await new Promise(resolve => setTimeout(resolve, 200));
+            
+            // Verify the update actually persisted by reading it back with explicit freshness
             const verifyResult = await pool.query(
-              'SELECT due_date, extended_this_cycle FROM loans WHERE id = $1',
+              'SELECT id, due_date, extended_this_cycle, updated_at FROM loans WHERE id = $1',
               [loan.id]
             );
             
             if (verifyResult.rows.length > 0) {
               const verified = verifyResult.rows[0];
+              const verifyDueDate = new Date(verified.due_date);
+              const expectedDueDate = new Date(`${formattedNewDueDate}T00:00:00Z`);
+              const datesMatch = verifyDueDate.toISOString().split('T')[0] === formattedNewDueDate;
+              
               console.log(`  ✅ Loan #${loan.id}: Extended from ${loan.due_date} to ${updatedLoan.due_date}`);
               console.log(`      ✓ Setting: due_date=${formattedNewDueDate}, extended=true, updated_at=NOW()`);
               console.log(`      ✓ Verified in DB: due_date=${verified.due_date}, extended=${verified.extended_this_cycle}`);
+              console.log(`      ✓ Date match check: ${datesMatch ? '✅ YES' : '❌ NO - DATES DO NOT MATCH!'}`);
+              if (!datesMatch) {
+                console.error(`      🚨 CRITICAL: Expected ${formattedNewDueDate} but got ${verifyDueDate.toISOString().split('T')[0]}`);
+              }
               console.log(`      (Paid: $${totalPaid.toFixed(2)} interest, Required: $${requiredInterest.toFixed(2)})`);
             }
           } else {
