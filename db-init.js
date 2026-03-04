@@ -393,15 +393,16 @@ async function retroactiveExtendLoans(pool) {
           const formattedNewDueDate = newDueDate.toISOString().split('T')[0];
 
           // Update the loan with properly formatted date using POOL
-          // IMPORTANT: Match the exact syntax of the working test endpoint
+          // Use TWO separate UPDATE statements to isolate any multi-column issues
           console.log(`      [DEBUG] Updating with formattedNewDueDate="${formattedNewDueDate}" (type: ${typeof formattedNewDueDate})`);
           
+          // STEP 1: Update due_date (like the working test endpoint)
           const updateResult = await pool.query(
-            `UPDATE loans SET due_date = TO_DATE($1, 'YYYY-MM-DD'), extended_this_cycle = true, updated_at = CURRENT_TIMESTAMP WHERE id = $2 RETURNING id, due_date, extended_this_cycle`,
+            `UPDATE loans SET due_date = TO_DATE($1, 'YYYY-MM-DD'), updated_at = CURRENT_TIMESTAMP WHERE id = $2 RETURNING id, due_date`,
             [formattedNewDueDate, loan.id]
           );
 
-          console.log(`      [UPDATE] Query returned ${updateResult.rows.length} rows`);
+          console.log(`      [UPDATE DUE_DATE] Query returned ${updateResult.rows.length} rows`);
           
           if (updateResult.rows.length > 0) {
             extendedCount++;
@@ -409,6 +410,13 @@ async function retroactiveExtendLoans(pool) {
             
             // Log what the RETURNING clause gave us
             console.log(`      [RETURNING] due_date="${updatedLoan.due_date}" (expected: "${formattedNewDueDate}")`);
+            
+            // STEP 2: Update extended_this_cycle flag separately
+            const flagResult = await pool.query(
+              `UPDATE loans SET extended_this_cycle = true WHERE id = $1 RETURNING id, extended_this_cycle`,
+              [loan.id]
+            );
+            console.log(`      [UPDATE FLAG] Query returned ${flagResult.rows.length} rows`);
             
             // Wait a moment to ensure write is flushed
             await new Promise(resolve => setTimeout(resolve, 200));
