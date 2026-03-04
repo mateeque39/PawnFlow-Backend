@@ -391,54 +391,60 @@ async function retroactiveExtendLoans(pool) {
           const day = String(dueDate.getDate()).padStart(2, '0');
           const newDueDate = `${year}-${month}-${day}`;
 
-          console.log(`      [DEBUG] Calculated newDueDate="${newDueDate}" from loan.due_date="${loan.due_date}"`);
+          console.log(`      [DEBUG] Calculated newDueDate="${newDueDate}" (String type) from loan.due_date="${loan.due_date}"`);
+          console.log(`      [DEBUG] Parameter value type: ${typeof newDueDate}, value: "${newDueDate}"`);
           
-          // STEP 1: Update due_date using parameterized date (EXACT same syntax as migration)
-          const updateResult = await pool.query(
-            `UPDATE loans SET due_date = $1::DATE, updated_at = CURRENT_TIMESTAMP WHERE id = $2 RETURNING id, due_date`,
-            [newDueDate, loan.id]
-          );
+          // STEP 1: Update due_date using TO_DATE (proven to work in test endpoint)
+          try {
+            const updateResult = await pool.query(
+              `UPDATE loans SET due_date = TO_DATE($1, 'YYYY-MM-DD'), updated_at = CURRENT_TIMESTAMP WHERE id = $2 RETURNING id, due_date`,
+              [newDueDate, loan.id]
+            );
 
-          console.log(`      [UPDATE DUE_DATE] Query returned ${updateResult.rows.length} rows`);
-          
-          if (updateResult.rows.length > 0) {
-            extendedCount++;
-            const updatedLoan = updateResult.rows[0];
+            console.log(`      [UPDATE DUE_DATE] Query returned ${updateResult.rows.length} rows`);
             
-            // Log what the RETURNING clause gave us
-            console.log(`      [RETURNING] due_date="${updatedLoan.due_date}"`);
-            
-            // STEP 2: Update extended_this_cycle flag separately
-            const flagResult = await pool.query(
-              `UPDATE loans SET extended_this_cycle = true WHERE id = $1 RETURNING id, extended_this_cycle`,
-              [loan.id]
-            );
-            console.log(`      [UPDATE FLAG] Query returned ${flagResult.rows.length} rows`);
-            
-            // Wait a moment to ensure write is flushed
-            await new Promise(resolve => setTimeout(resolve, 200));
-            
-            // Verify the update actually persisted by reading it back with explicit freshness
-            const verifyResult = await pool.query(
-              'SELECT id, due_date, extended_this_cycle, updated_at FROM loans WHERE id = $1',
-              [loan.id]
-            );
-            
-            if (verifyResult.rows.length > 0) {
-              const verified = verifyResult.rows[0];
-              const dbDueDate = verified.due_date.toISOString().split('T')[0];
-              const datesMatch = dbDueDate === newDueDate;
+            if (updateResult.rows.length > 0) {
+              extendedCount++;
+              const updatedLoan = updateResult.rows[0];
               
-              console.log(`  ✅ Loan #${loan.id}: Extended due_date to ${newDueDate}`);
-              console.log(`      ✓ Verified in DB: due_date=${dbDueDate}, extended=${verified.extended_this_cycle}`);
-              console.log(`      ✓ Match: ${datesMatch ? '✅ YES' : '❌ NO'}`);
-              if (!datesMatch) {
-                console.error(`      🚨 MISMATCH: Expected ${newDueDate} but got ${dbDueDate}`);
+              // Log what the RETURNING clause gave us
+              console.log(`      [RETURNING] due_date="${updatedLoan.due_date}" (type: ${typeof updatedLoan.due_date})`);
+              
+              // STEP 2: Update extended_this_cycle flag separately
+              const flagResult = await pool.query(
+                `UPDATE loans SET extended_this_cycle = true WHERE id = $1 RETURNING id, extended_this_cycle`,
+                [loan.id]
+              );
+              console.log(`      [UPDATE FLAG] Query returned ${flagResult.rows.length} rows`);
+              
+              // Wait a moment to ensure write is flushed
+              await new Promise(resolve => setTimeout(resolve, 200));
+              
+              // Verify the update actually persisted by reading it back with explicit freshness
+              const verifyResult = await pool.query(
+                'SELECT id, due_date, extended_this_cycle, updated_at FROM loans WHERE id = $1',
+                [loan.id]
+              );
+              
+              if (verifyResult.rows.length > 0) {
+                const verified = verifyResult.rows[0];
+                const dbDueDate = verified.due_date.toISOString().split('T')[0];
+                const datesMatch = dbDueDate === newDueDate;
+                
+                console.log(`  ✅ Loan #${loan.id}: Extended due_date to ${newDueDate}`);
+                console.log(`      ✓ Verified in DB: due_date=${dbDueDate}, extended=${verified.extended_this_cycle}`);
+                console.log(`      ✓ Match: ${datesMatch ? '✅ YES' : '❌ NO'}`);
+                if (!datesMatch) {
+                  console.error(`      🚨 MISMATCH: Expected ${newDueDate} but got ${dbDueDate}`);
+                }
+                console.log(`      (Paid: $${totalPaid.toFixed(2)} interest, Required: $${requiredInterest.toFixed(2)})`);
               }
-              console.log(`      (Paid: $${totalPaid.toFixed(2)} interest, Required: $${requiredInterest.toFixed(2)})`);
+            } else {
+              console.log(`  ❌ Loan #${loan.id}: UPDATE returned 0 rows - possibly already updated`);
             }
-          } else {
-            console.log(`  ❌ Loan #${loan.id}: UPDATE returned 0 rows - possibly already updated`);
+          } catch (updateErr) {
+            console.error(`  ❌ Loan #${loan.id}: UPDATE FAILED - ${updateErr.message}`);
+            console.error(`      Full error:`, updateErr);
           }
         } else {
           console.log(`      ⏭️  Skipped: hasPayments=${hasPayments}, totalPaid >= required=${totalPaid >= requiredInterest}`);
