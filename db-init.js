@@ -305,7 +305,7 @@ async function retroactiveExtendLoans(pool) {
       try {
         console.log(`  📍 Checking Loan #${loan.id}: Principal $${loan.loan_amount}, Interest $${loan.interest_amount}`);
         
-        // Check BOTH payment_history AND payments tables (might have data in either)
+        // Check ALL THREE payment tables (payment_history, payments, loan_payments)
         const paymentHistoryResult = await client.query(
           `SELECT SUM(CAST(payment_amount AS NUMERIC)) as total_paid_ph, COUNT(*) as payment_count_ph
            FROM payment_history 
@@ -319,6 +319,13 @@ async function retroactiveExtendLoans(pool) {
            WHERE loan_id = $1`,
           [loan.id]
         );
+        
+        const loanPaymentsResult = await client.query(
+          `SELECT SUM(CAST(amount_paid AS NUMERIC)) as total_paid_lp, COUNT(*) as payment_count_lp
+           FROM loan_payments 
+           WHERE loan_id = $1`,
+          [loan.id]
+        );
 
         const totalFromHistory = parseFloat(paymentHistoryResult.rows[0]?.total_paid_ph || 0);
         const countFromHistory = parseInt(paymentHistoryResult.rows[0]?.payment_count_ph || 0);
@@ -326,16 +333,20 @@ async function retroactiveExtendLoans(pool) {
         const totalFromPayments = parseFloat(paymentsResult.rows[0]?.total_paid_p || 0);
         const countFromPayments = parseInt(paymentsResult.rows[0]?.payment_count_p || 0);
         
-        const totalPaid = totalFromHistory + totalFromPayments;
-        const hasPayments = countFromHistory > 0 || countFromPayments > 0;
+        const totalFromLoanPayments = parseFloat(loanPaymentsResult.rows[0]?.total_paid_lp || 0);
+        const countFromLoanPayments = parseInt(loanPaymentsResult.rows[0]?.payment_count_lp || 0);
+        
+        const totalPaid = totalFromHistory + totalFromPayments + totalFromLoanPayments;
+        const hasPayments = countFromHistory > 0 || countFromPayments > 0 || countFromLoanPayments > 0;
         
         console.log(`      payment_history: ${countFromHistory} records, $${totalFromHistory.toFixed(2)}`);
         console.log(`      payments table: ${countFromPayments} records, $${totalFromPayments.toFixed(2)}`);
+        console.log(`      loan_payments: ${countFromLoanPayments} records, $${totalFromLoanPayments.toFixed(2)}`);
         
-        // Get first sample from both tables for debugging
+        // Get sample records for debugging
         if (countFromHistory > 0) {
           const samplePH = await client.query(
-            `SELECT payment_amount, payment_date FROM payment_history WHERE loan_id = $1 LIMIT 3`,
+            `SELECT payment_amount, payment_date FROM payment_history WHERE loan_id = $1 LIMIT 1`,
             [loan.id]
           );
           samplePH.rows.forEach(p => {
@@ -345,18 +356,28 @@ async function retroactiveExtendLoans(pool) {
         
         if (countFromPayments > 0) {
           const sampleP = await client.query(
-            `SELECT payment_amount, payment_date FROM payments WHERE loan_id = $1 LIMIT 3`,
+            `SELECT payment_amount, payment_date FROM payments WHERE loan_id = $1 LIMIT 1`,
             [loan.id]
           );
           sampleP.rows.forEach(p => {
             console.log(`        [payments] - $${p.payment_amount} on ${p.payment_date}`);
           });
         }
+        
+        if (countFromLoanPayments > 0) {
+          const sampleLP = await client.query(
+            `SELECT amount_paid, payment_date FROM loan_payments WHERE loan_id = $1 LIMIT 1`,
+            [loan.id]
+          );
+          sampleLP.rows.forEach(p => {
+            console.log(`        [loan_payments] - $${p.amount_paid} on ${p.payment_date}`);
+          });
+        }
 
         // Check if total paid >= required interest amount
         const requiredInterest = parseFloat(loan.interest_amount || 0);
         
-        console.log(`      Total Paid (both tables): $${totalPaid.toFixed(2)}, Required: $${requiredInterest.toFixed(2)}`);
+        console.log(`      Total Paid (all tables): $${totalPaid.toFixed(2)}, Required: $${requiredInterest.toFixed(2)}`);
         
         if (hasPayments && totalPaid >= requiredInterest) {
           console.log(`      ✓ Qualifies for extension`);
