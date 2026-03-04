@@ -18,20 +18,27 @@ async function runMigrationOnStartup(pool) {
 
   try {
     // Get all active loans that might need capitalization
+    // Check ALL payment tables, not just payment_history
     const loansResult = await pool.query(
       `SELECT l.id, l.loan_amount, l.interest_rate, l.interest_amount, l.due_date,
               l.status, l.remaining_balance,
-              COALESCE(SUM(ph.payment_amount), 0) as total_paid
+              COALESCE(
+                (SELECT SUM(CAST(payment_amount AS NUMERIC)) FROM payment_history WHERE loan_id = l.id) +
+                (SELECT SUM(CAST(payment_amount AS NUMERIC)) FROM payments WHERE loan_id = l.id) +
+                (SELECT SUM(CAST(amount_paid AS NUMERIC)) FROM loan_payments WHERE loan_id = l.id),
+                0
+              ) as total_paid
        FROM loans l
-       LEFT JOIN payment_history ph ON l.id = ph.loan_id
        WHERE l.status IN ('active', 'overdue')
        AND l.remaining_balance > 0
-       GROUP BY l.id
-       HAVING COALESCE(SUM(ph.payment_amount), 0) >= l.interest_amount
        ORDER BY l.id ASC`
     );
 
-    const loansToCapitalize = loansResult.rows;
+    const loansToCapitalize = loansResult.rows.filter(l => {
+      const totalPaid = parseFloat(l.total_paid || 0);
+      const interestAmount = parseFloat(l.interest_amount || 0);
+      return totalPaid >= interestAmount;
+    });
 
     if (loansToCapitalize.length === 0) {
       console.log('✅ No loans need capitalization. All loans are up to date!');
@@ -46,6 +53,14 @@ async function runMigrationOnStartup(pool) {
 
     console.log(`📊 Found ${loansToCapitalize.length} loans needing capitalization`);
     console.log('Starting automated capitalization process...\n');
+
+    // Debug: show which loans need capitalization
+    loansToCapitalize.forEach(loan => {
+      const totalPaid = parseFloat(loan.total_paid || 0);
+      const interestAmount = parseFloat(loan.interest_amount || 0);
+      console.log(`  📋 Loan #${loan.id}: Total Paid $${totalPaid} >= Required Interest $${interestAmount} ✓`);
+    });
+    console.log();
 
     let capitalized = 0;
     let errors = 0;
@@ -95,7 +110,21 @@ async function runMigrationOnStartup(pool) {
         );
 
         capitalized++;
-        console.log(`  ✅ Loan ${loan.id}: Principal $${currentPrincipal} → $${newPrincipal}, Due date extended to ${newDueDate}`);
+        
+        // Format old due date for comparison
+        const oldDueDateObj = new Date(loan.due_date);
+        const oldDueDateStr = oldDueDateObj.toISOString().split('T')[0];
+        
+        console.log(`  ✅ Loan ${loan.id}: Principal $${currentPrincipal} → $${newPrincipal}`);
+        console.log(`     Due date: ${oldDueDateStr} → ${newDueDate}`);
+        
+        // Verify the update persisted to DB
+        const verifyResult = await pool.query('SELECT due_date, loan_amount FROM loans WHERE id = $1', [loan.id]);
+        if (verifyResult.rows.length > 0) {
+          const dbDueDate = verifyResult.rows[0].due_date.toISOString().split('T')[0];
+          const dbPrincipal = verifyResult.rows[0].loan_amount;
+          console.log(`     ✓ DB verified: due_date=${dbDueDate}, principal=$${dbPrincipal}`);
+        }
       } catch (err) {
         errors++;
         console.error(`  ❌ Loan ${loan.id}: ${err.message}`);
