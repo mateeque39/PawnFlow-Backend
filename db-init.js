@@ -277,29 +277,29 @@ async function retroactiveExtendLoans(pool) {
   try {
     console.log('\n🔄 Checking for loans to retroactively extend...');
 
-    // Reset the extended_this_cycle flag for ALL active loans at startup
+    // Reset the extended_this_cycle flag for ALL loans (not just active, so we catch overdue too)
     // This allows re-extending loans on each startup (idempotent operation)
     console.log('   🔄 Resetting extension flags for fresh check...');
     await pool.query(
-      `UPDATE loans SET extended_this_cycle = false WHERE status = 'active'`
+      `UPDATE loans SET extended_this_cycle = false WHERE status IN ('active', 'overdue')`
     );
 
-    // Get all active loans for checking
+    // Get all active AND overdue loans for checking
     const loansResult = await pool.query(
       `SELECT * FROM loans 
-       WHERE status = 'active'
+       WHERE status IN ('active', 'overdue')
        ORDER BY id ASC`
     );
 
     const loans = loansResult.rows;
     
     if (loans.length === 0) {
-      console.log('⏭️  No active loans found');
+      console.log('⏭️  No active or overdue loans found');
       return 0;
     }
 
     console.log(`📋 Found ${loans.length} loans to check for extension`);
-    loans.forEach(l => console.log(`   - Loan #${l.id}: $${l.loan_amount} (Interest: $${l.interest_amount}, Status: ${l.status}, Extended: ${l.extended_this_cycle})`));
+    loans.forEach(l => console.log(`   - Loan #${l.id}: Principal $${l.loan_amount}, Interest $${l.interest_amount}, Status: ${l.status}, Extended: ${l.extended_this_cycle}`));
     console.log('');
 
     // Check each loan for extension eligibility
@@ -340,49 +340,48 @@ async function retroactiveExtendLoans(pool) {
         
         const totalPaid = totalFromHistory + totalFromPayments + totalFromLoanPayments;
         const hasPayments = countFromHistory > 0 || countFromPayments > 0 || countFromLoanPayments > 0;
+        const requiredInterest = parseFloat(loan.interest_amount || 0);
+        const qualifies = hasPayments && totalPaid >= requiredInterest;
         
         console.log(`      payment_history: ${countFromHistory} records, $${totalFromHistory.toFixed(2)}`);
         console.log(`      payments table: ${countFromPayments} records, $${totalFromPayments.toFixed(2)}`);
         console.log(`      loan_payments: ${countFromLoanPayments} records, $${totalFromLoanPayments.toFixed(2)}`);
+        console.log(`      Total Paid: $${totalPaid.toFixed(2)}, Required Interest: $${requiredInterest.toFixed(2)}`);
+        console.log(`      QUALIFIES: ${qualifies ? '✅ YES' : '❌ NO (hasPayments=' + hasPayments + ', paid>= required=' + (totalPaid >= requiredInterest) + ')'}`);
         
-        // Get sample records for debugging
-        if (countFromHistory > 0) {
+        // Get sample records for debugging - ONLY IF DOESN'T QUALIFY (to debug why)
+        if (!qualifies && countFromHistory > 0) {
           const samplePH = await pool.query(
             `SELECT payment_amount, payment_date FROM payment_history WHERE loan_id = $1 LIMIT 1`,
             [loan.id]
           );
           samplePH.rows.forEach(p => {
-            console.log(`        [history] - $${p.payment_amount} on ${p.payment_date}`);
+            console.log(`        [history sample] - $${p.payment_amount} on ${p.payment_date}`);
           });
         }
         
-        if (countFromPayments > 0) {
+        if (!qualifies && countFromPayments > 0) {
           const sampleP = await pool.query(
             `SELECT payment_amount, payment_date FROM payments WHERE loan_id = $1 LIMIT 1`,
             [loan.id]
           );
           sampleP.rows.forEach(p => {
-            console.log(`        [payments] - $${p.payment_amount} on ${p.payment_date}`);
+            console.log(`        [payments sample] - $${p.payment_amount} on ${p.payment_date}`);
           });
         }
         
-        if (countFromLoanPayments > 0) {
+        if (!qualifies && countFromLoanPayments > 0) {
           const sampleLP = await pool.query(
             `SELECT amount_paid, payment_date FROM loan_payments WHERE loan_id = $1 LIMIT 1`,
             [loan.id]
           );
           sampleLP.rows.forEach(p => {
-            console.log(`        [loan_payments] - $${p.amount_paid} on ${p.payment_date}`);
+            console.log(`        [loan_payments sample] - $${p.amount_paid} on ${p.payment_date}`);
           });
         }
-
-        // Check if total paid >= required interest amount
-        const requiredInterest = parseFloat(loan.interest_amount || 0);
         
-        console.log(`      Total Paid (all tables): $${totalPaid.toFixed(2)}, Required: $${requiredInterest.toFixed(2)}`);
-        
-        if (hasPayments && totalPaid >= requiredInterest) {
-          console.log(`      ✓ Qualifies for extension`);
+        if (qualifies) {
+          console.log(`      ✅ EXTENSION QUALIFIED`);
           
           // Calculate new due date EXACTLY like migrate-on-startup.js does (proven to work)
           const dueDate = new Date(loan.due_date);
