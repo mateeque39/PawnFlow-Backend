@@ -265,6 +265,93 @@ COMMENT ON COLUMN loans.zipcode IS 'Customer postal/zip code';
 `;
 
 /**
+ * Retroactively extend loans that have paid interest-only payments
+ * This function identifies qualifying loans and extends their due dates automatically
+ * 
+ * @param {Pool} pool - PostgreSQL connection pool
+ * @returns {Promise<number>} - Number of loans extended
+ */
+async function retroactiveExtendLoans(pool) {
+  const client = await pool.connect();
+  let extendedCount = 0;
+
+  try {
+    console.log('\n🔄 Checking for loans to retroactively extend...');
+
+    // Get all active loans that haven't been extended yet
+    const loansResult = await client.query(
+      `SELECT * FROM loans 
+       WHERE status = 'active' AND extended_this_cycle = false
+       ORDER BY id ASC`
+    );
+
+    const loans = loansResult.rows;
+    
+    if (loans.length === 0) {
+      console.log('⏭️  No loans need retroactive extension');
+      return 0;
+    }
+
+    console.log(`📋 Found ${loans.length} loans to check for extension\n`);
+
+    // Check each loan for extension eligibility
+    for (const loan of loans) {
+      try {
+        // Get payment history for this loan
+        const paymentHistoryResult = await client.query(
+          `SELECT SUM(payment_amount) as total_paid, COUNT(*) as payment_count
+           FROM payment_history 
+           WHERE loan_id = $1`,
+          [loan.id]
+        );
+
+        const totalPaid = parseFloat(paymentHistoryResult.rows[0]?.total_paid || 0);
+        const hasPayments = parseInt(paymentHistoryResult.rows[0]?.payment_count || 0) > 0;
+
+        // Check if total paid >= required interest amount
+        const requiredInterest = parseFloat(loan.interest_amount || 0);
+        
+        if (hasPayments && totalPaid >= requiredInterest) {
+          // Calculate new due date (add 1 month)
+          const currentDueDate = new Date(loan.due_date);
+          const newDueDate = new Date(currentDueDate);
+          newDueDate.setMonth(newDueDate.getMonth() + 1);
+
+          // Update the loan
+          await client.query(
+            `UPDATE loans 
+             SET 
+               due_date = $1,
+               extended_this_cycle = true,
+               last_extended_at = CURRENT_TIMESTAMP,
+               updated_at = CURRENT_TIMESTAMP
+             WHERE id = $2`,
+            [newDueDate, loan.id]
+          );
+
+          extendedCount++;
+          console.log(`  ✅ Loan #${loan.id}: Extended from ${loan.due_date} to ${newDueDate.toISOString().split('T')[0]}`);
+          console.log(`      (Paid: $${totalPaid.toFixed(2)} interest, Required: $${requiredInterest.toFixed(2)})`);
+        }
+      } catch (loanErr) {
+        console.error(`  ❌ Error processing Loan #${loan.id}:`, loanErr.message);
+      }
+    }
+
+    if (extendedCount > 0) {
+      console.log(`\n✅ Retroactively extended ${extendedCount} loans`);
+    }
+
+    return extendedCount;
+  } catch (error) {
+    console.error('❌ Retroactive extension check failed:', error.message);
+    return 0;
+  } finally {
+    client.release();
+  }
+}
+
+/**
  * Initialize database schema
  * This function creates all necessary tables if they don't exist
  * 
@@ -352,6 +439,12 @@ async function initializeDatabase(pool) {
     result.rows.forEach(row => {
       console.log(`   ✓ ${row.table_name}`);
     });
+
+    // Release client before running retroactive extension (it needs its own connection)
+    client.release();
+    
+    // Run retroactive extension check for existing loans
+    await retroactiveExtendLoans(pool);
     
     return true;
   } catch (error) {
@@ -361,7 +454,13 @@ async function initializeDatabase(pool) {
     console.error('Full error:', error);
     throw error;
   } finally {
-    client.release();
+    if (client) {
+      try {
+        client.release();
+      } catch (releaseErr) {
+        // Client already released, ignore
+      }
+    }
   }
 }
 
@@ -389,5 +488,6 @@ async function isDatabaseInitialized(pool) {
 module.exports = {
   initializeDatabase,
   isDatabaseInitialized,
+  retroactiveExtendLoans,
   DATABASE_SCHEMA
 };
