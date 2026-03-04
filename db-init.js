@@ -296,11 +296,15 @@ async function retroactiveExtendLoans(pool) {
       return 0;
     }
 
-    console.log(`📋 Found ${loans.length} loans to check for extension\n`);
+    console.log(`📋 Found ${loans.length} loans to check for extension`);
+    loans.forEach(l => console.log(`   - Loan #${l.id}: $${l.loan_amount} (Interest: $${l.interest_amount}, Status: ${l.status}, Extended: ${l.extended_this_cycle})`));
+    console.log('');
 
     // Check each loan for extension eligibility
     for (const loan of loans) {
       try {
+        console.log(`  📍 Checking Loan #${loan.id}: Principal $${loan.loan_amount}, Interest $${loan.interest_amount}`);
+        
         // Get payment history for this loan
         const paymentHistoryResult = await client.query(
           `SELECT SUM(payment_amount) as total_paid, COUNT(*) as payment_count
@@ -315,7 +319,11 @@ async function retroactiveExtendLoans(pool) {
         // Check if total paid >= required interest amount
         const requiredInterest = parseFloat(loan.interest_amount || 0);
         
+        console.log(`      Payments: ${paymentHistoryResult.rows[0]?.payment_count || 0}, Total Paid: $${totalPaid.toFixed(2)}, Required: $${requiredInterest.toFixed(2)}`);
+        
         if (hasPayments && totalPaid >= requiredInterest) {
+          console.log(`      ✓ Qualifies for extension`);
+          
           // Calculate new due date (add 1 month)
           const currentDueDate = new Date(loan.due_date);
           const newDueDate = new Date(currentDueDate);
@@ -345,6 +353,8 @@ async function retroactiveExtendLoans(pool) {
           } else {
             console.log(`  ❌ Loan #${loan.id}: Update failed - loan not found`);
           }
+        } else {
+          console.log(`      ⏭️  Skipped: hasPayments=${hasPayments}, totalPaid>= required=${totalPaid >= requiredInterest}`);
         }
       } catch (loanErr) {
         console.error(`  ❌ Error processing Loan #${loan.id}:`, loanErr.message);
