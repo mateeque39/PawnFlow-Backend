@@ -19,9 +19,10 @@ async function runMigrationOnStartup(pool) {
   try {
     // Get all active loans that might need capitalization
     // Check ALL payment tables, not just payment_history
+    // EXCLUDE loans that already have extended_this_cycle = true (retroactively extended)
     const loansResult = await pool.query(
       `SELECT l.id, l.loan_amount, l.interest_rate, l.interest_amount, l.due_date,
-              l.status, l.remaining_balance,
+              l.status, l.remaining_balance, l.extended_this_cycle,
               COALESCE(
                 (SELECT SUM(CAST(payment_amount AS NUMERIC)) FROM payment_history WHERE loan_id = l.id) +
                 (SELECT SUM(CAST(payment_amount AS NUMERIC)) FROM payments WHERE loan_id = l.id) +
@@ -31,6 +32,7 @@ async function runMigrationOnStartup(pool) {
        FROM loans l
        WHERE l.status IN ('active', 'overdue')
        AND l.remaining_balance > 0
+       AND l.extended_this_cycle = false
        ORDER BY l.id ASC`
     );
 
