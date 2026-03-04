@@ -384,14 +384,20 @@ async function retroactiveExtendLoans(pool) {
         if (hasPayments && totalPaid >= requiredInterest) {
           console.log(`      ✓ Qualifies for extension`);
           
-          // Use PostgreSQL to add 1 month to current due_date
-          // This avoids any JavaScript timezone issues
-          console.log(`      [DEBUG] Using PostgreSQL to extend due_date by 1 month from ${loan.due_date}`);
+          // Calculate new due date EXACTLY like migrate-on-startup.js does (proven to work)
+          const dueDate = new Date(loan.due_date);
+          dueDate.setMonth(dueDate.getMonth() + 1);
+          const year = dueDate.getFullYear();
+          const month = String(dueDate.getMonth() + 1).padStart(2, '0');
+          const day = String(dueDate.getDate()).padStart(2, '0');
+          const newDueDate = `${year}-${month}-${day}`;
+
+          console.log(`      [DEBUG] Calculated newDueDate="${newDueDate}" from loan.due_date="${loan.due_date}"`);
           
-          // STEP 1: Update due_date using PostgreSQL date arithmetic (adds 1 month in database)
+          // STEP 1: Update due_date using parameterized date (EXACT same syntax as migration)
           const updateResult = await pool.query(
-            `UPDATE loans SET due_date = due_date + INTERVAL '1 month', updated_at = CURRENT_TIMESTAMP WHERE id = $1 RETURNING id, due_date`,
-            [loan.id]
+            `UPDATE loans SET due_date = $1::DATE, updated_at = CURRENT_TIMESTAMP WHERE id = $2 RETURNING id, due_date`,
+            [newDueDate, loan.id]
           );
 
           console.log(`      [UPDATE DUE_DATE] Query returned ${updateResult.rows.length} rows`);
@@ -421,18 +427,14 @@ async function retroactiveExtendLoans(pool) {
             
             if (verifyResult.rows.length > 0) {
               const verified = verifyResult.rows[0];
-              const originalDate = new Date(loan.due_date).toISOString().split('T')[0];
-              const updatedDate = new Date(updatedLoan.due_date).toISOString().split('T')[0];
-              const verifiedDate = new Date(verified.due_date).toISOString().split('T')[0];
+              const dbDueDate = verified.due_date.toISOString().split('T')[0];
+              const datesMatch = dbDueDate === newDueDate;
               
-              // Check if the date was actually extended (should be 1 month later)
-              const datesMatch = updatedDate === verifiedDate;
-              
-              console.log(`  ✅ Loan #${loan.id}: Extended from ${originalDate} to ${updatedDate}`);
-              console.log(`      ✓ Verified in DB: due_date=${verifiedDate}, extended=${verified.extended_this_cycle}`);
-              console.log(`      ✓ Date match check: ${datesMatch ? '✅ YES' : '❌ NO - DATES DO NOT MATCH!'}`);
+              console.log(`  ✅ Loan #${loan.id}: Extended due_date to ${newDueDate}`);
+              console.log(`      ✓ Verified in DB: due_date=${dbDueDate}, extended=${verified.extended_this_cycle}`);
+              console.log(`      ✓ Match: ${datesMatch ? '✅ YES' : '❌ NO'}`);
               if (!datesMatch) {
-                console.error(`      🚨 CRITICAL: Expected ${updatedDate} but got ${verifiedDate}`);
+                console.error(`      🚨 MISMATCH: Expected ${newDueDate} but got ${dbDueDate}`);
               }
               console.log(`      (Paid: $${totalPaid.toFixed(2)} interest, Required: $${requiredInterest.toFixed(2)})`);
             }
