@@ -1562,11 +1562,9 @@ app.get('/customers/:customerId/loans', async (req, res) => {
       return res.status(404).json({ message: 'Customer not found' });
     }
 
-    // Get active loans
+    // Get active loans - SELECT ALL columns to include extended_this_cycle
     const activeLoansResult = await pool.query(
-      `SELECT id, transaction_number, loan_amount, interest_rate, total_payable_amount,
-              remaining_balance, due_date, loan_issued_date, status
-       FROM loans
+      `SELECT * FROM loans
        WHERE customer_id = $1 AND status = 'active'
        ORDER BY loan_issued_date DESC`,
       [customerIdNum]
@@ -1574,9 +1572,7 @@ app.get('/customers/:customerId/loans', async (req, res) => {
 
     // Get redeemed loans
     const redeemedLoansResult = await pool.query(
-      `SELECT id, transaction_number, loan_amount, interest_rate, interest_amount, total_payable_amount,
-              remaining_balance, due_date, loan_issued_date, status
-       FROM loans
+      `SELECT * FROM loans
        WHERE customer_id = $1 AND status = 'redeemed'
        ORDER BY loan_issued_date DESC`,
       [customerIdNum]
@@ -1584,13 +1580,20 @@ app.get('/customers/:customerId/loans', async (req, res) => {
 
     // Get forfeited loans
     const forfeitedLoansResult = await pool.query(
-      `SELECT id, transaction_number, loan_amount, interest_rate, interest_amount, total_payable_amount,
-              remaining_balance, due_date, loan_issued_date, status
-       FROM loans
+      `SELECT * FROM loans
        WHERE customer_id = $1 AND status = 'forfeited'
        ORDER BY loan_issued_date DESC`,
       [customerIdNum]
     );
+
+    // Debug log for loans 8, 9, 11
+    console.log(`📥 Frontend API - Customer ${customerIdNum} loans:`);
+    [8, 9, 11].forEach(loanId => {
+      const loan = activeLoansResult.rows.find(l => l.id === loanId);
+      if (loan) {
+        console.log(`  Loan #${loanId}: due_date=${loan.due_date}, extended_this_cycle=${loan.extended_this_cycle}`);
+      }
+    });
 
     // Get payment history
     const paymentHistoryResult = await pool.query(
