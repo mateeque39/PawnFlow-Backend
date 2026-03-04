@@ -3279,6 +3279,14 @@ app.get('/customers/:customerId/loans', async (req, res) => {
       [customerIdNum]
     );
 
+    // Debug: Show what's in the DB for loans 8, 9, 11
+    [8, 9, 11].forEach(loanId => {
+      const dbLoan = result.rows.find(l => l.id === loanId);
+      if (dbLoan) {
+        console.log(`📥 Database for Loan #${loanId}: due_date=${dbLoan.due_date}, extended_this_cycle=${dbLoan.extended_this_cycle}`);
+      }
+    });
+
     // Helper function to compute overdue info
     const computeOverdueInfo = (loan) => {
       const isClosedStatus = ['PAID', 'CLOSED', 'paid', 'closed'].includes(loan.status);
@@ -3352,6 +3360,14 @@ app.get('/customers/:customerId/loans', async (req, res) => {
     });
 
     console.log(`🎯 Customer ${customerIdNum} loans summary: active=${activeLoans.length}, overdue=${overdueLoans.length}, redeemed=${redeemedLoans.length}, forfeited=${forfeitedLoans.length}`);
+
+    // Debug log for loans 8, 9, 11 to verify due dates in API response
+    [8, 9, 11].forEach(loanId => {
+      const loan = loans.find(l => l.id === loanId);
+      if (loan) {
+        console.log(`📤 API Response for Loan #${loanId}: due_date=${loan.due_date}, extended_this_cycle=${loan.extended_this_cycle}`);
+      }
+    });
 
     res.json({
       activeLoans,
