@@ -3370,6 +3370,12 @@ app.get('/customers/:customerId/loans', async (req, res) => {
       }
     });
 
+    // Disable caching for this endpoint to ensure fresh data is always returned
+    res.set('Cache-Control', 'no-cache, no-store, must-revalidate, private');
+    res.set('Pragma', 'no-cache');
+    res.set('Expires', '0');
+    res.removeHeader('ETag');
+
     res.json({
       activeLoans,
       overdueLoans,
