@@ -279,7 +279,40 @@ emailTransporter.verify((error, success) => {
   }
 });
 
-// ======================== UTILITY FUNCTIONS ========================
+// ======================== DIAGNOSTIC ENDPOINTS ========================
+
+// DEBUG ENDPOINT - Check actual database values for loans
+app.get('/api/debug/loans/:loanId', async (req, res) => {
+  try {
+    const loanId = parseInt(req.params.loanId, 10);
+    const result = await pool.query(
+      'SELECT id, due_date, extended_this_cycle, updated_at, loan_amount, interest_amount FROM loans WHERE id = $1',
+      [loanId]
+    );
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ message: 'Loan not found' });
+    }
+    
+    const loan = result.rows[0];
+    console.log(`🔍 DEBUG: Loan #${loanId} from DB:`, loan);
+    
+    res.json({
+      loanId,
+      database_due_date: loan.due_date,
+      database_extended_flag: loan.extended_this_cycle,
+      database_updated_at: loan.updated_at,
+      loan_amount: loan.loan_amount,
+      interest_amount: loan.interest_amount,
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('Debug endpoint error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ======================== STANDARD ENDPOINTS ========================
 
 // Get current date in EST timezone (YYYY-MM-DD format)
 // This ensures dates are created in Eastern Standard Time
