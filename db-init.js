@@ -305,9 +305,21 @@ async function retroactiveExtendLoans(pool) {
       try {
         console.log(`  📍 Checking Loan #${loan.id}: Principal $${loan.loan_amount}, Interest $${loan.interest_amount}`);
         
+        // First get all payment records for debugging
+        const allPaymentsResult = await client.query(
+          `SELECT payment_amount, payment_date, payment_method FROM payment_history WHERE loan_id = $1 ORDER BY payment_date`,
+          [loan.id]
+        );
+        console.log(`      Raw payments found: ${allPaymentsResult.rows.length} records`);
+        if (allPaymentsResult.rows.length > 0) {
+          allPaymentsResult.rows.forEach(p => {
+            console.log(`        - $${p.payment_amount} on ${p.payment_date} (${p.payment_method})`);
+          });
+        }
+        
         // Get payment history for this loan
         const paymentHistoryResult = await client.query(
-          `SELECT SUM(payment_amount) as total_paid, COUNT(*) as payment_count
+          `SELECT SUM(CAST(payment_amount AS NUMERIC)) as total_paid, COUNT(*) as payment_count
            FROM payment_history 
            WHERE loan_id = $1`,
           [loan.id]
