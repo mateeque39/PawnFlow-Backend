@@ -312,6 +312,50 @@ app.get('/api/debug/loans/:loanId', async (req, res) => {
   }
 });
 
+// DEBUG ENDPOINT - Force update a loan's due date to test if updates work
+app.get('/api/debug/update-loan/:loanId/:newDate', async (req, res) => {
+  try {
+    const loanId = parseInt(req.params.loanId, 10);
+    const newDate = req.params.newDate; // Format: YYYY-MM-DD
+    
+    // Validate date format
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(newDate)) {
+      return res.status(400).json({ message: 'Invalid date format. Use YYYY-MM-DD' });
+    }
+    
+    console.log(`🔧 TEST UPDATE: Loan #${loanId} due_date = ${newDate}`);
+    
+    // Try to update
+    const updateResult = await pool.query(
+      `UPDATE loans SET due_date = TO_DATE($1, 'YYYY-MM-DD'), updated_at = CURRENT_TIMESTAMP WHERE id = $2 RETURNING id, due_date`,
+      [newDate, loanId]
+    );
+    
+    if (updateResult.rows.length === 0) {
+      return res.status(404).json({ message: 'Loan not found or update failed' });
+    }
+    
+    console.log(`✅ UPDATE returned: ${JSON.stringify(updateResult.rows[0])}`);
+    
+    // Now verify immediately
+    const verifyResult = await pool.query(
+      'SELECT id, due_date FROM loans WHERE id = $1',
+      [loanId]
+    );
+    
+    console.log(`✅ VERIFY returned: ${JSON.stringify(verifyResult.rows[0])}`);
+    
+    res.json({
+      update_result: updateResult.rows[0],
+      verify_result: verifyResult.rows[0],
+      success: true
+    });
+  } catch (err) {
+    console.error('Test update endpoint error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ======================== STANDARD ENDPOINTS ========================
 
 // Get current date in EST timezone (YYYY-MM-DD format)
