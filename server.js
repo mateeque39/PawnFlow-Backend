@@ -9,7 +9,7 @@ const { processPaymentWithCapitalization, extendDateByOneMonth, processPaymentWi
 const { runMigrationOnStartup } = require('./migrate-on-startup');
 const { calculateLoanState } = require('./loan-calculator');
 const nodemailer = require('nodemailer');
-const { initializeDatabase, isDatabaseInitialized } = require('./db-init');
+const { initializeDatabase, isDatabaseInitialized, retroactiveExtendLoans } = require('./db-init');
 require('dotenv').config();
 
 const app = express();
@@ -128,8 +128,13 @@ pool.query('SELECT NOW()', async (err, res) => {
       // Run migrations after schema initialization
       await runMigrations();
 
-      // Run automatic interest capitalization migration on startup FIRST
-      console.log('\n🔄 Running automatic interest capitalization check...');
+      // Run retroactive extension FIRST (before capitalization) so capitalization uses correct dates
+      console.log('\n🔄 Running retroactive loan extension check...');
+      const extendedLoans = await retroactiveExtendLoans(pool);
+      console.log(`✅ Extended ${extendedLoans} loans retroactively\n`);
+
+      // Run automatic interest capitalization migration on startup AFTER extension
+      console.log('🔄 Running automatic interest capitalization check...');
       const migrationResult = await runMigrationOnStartup(pool);
       if (migrationResult.success) {
         console.log(`✅ Auto-migration complete: ${migrationResult.message}`);
