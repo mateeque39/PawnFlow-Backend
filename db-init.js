@@ -277,17 +277,24 @@ async function retroactiveExtendLoans(pool) {
   try {
     console.log('\n🔄 Checking for loans to retroactively extend...');
 
-    // Get all active loans that need extension (don't reset flag - only extend unflag ones)
+    // Reset the extended_this_cycle flag for ALL active loans at startup
+    // This allows re-extending loans on each startup (idempotent operation)
+    console.log('   🔄 Resetting extension flags for fresh check...');
+    await pool.query(
+      `UPDATE loans SET extended_this_cycle = false WHERE status = 'active'`
+    );
+
+    // Get all active loans for checking
     const loansResult = await pool.query(
       `SELECT * FROM loans 
-       WHERE status = 'active' AND extended_this_cycle = false
+       WHERE status = 'active'
        ORDER BY id ASC`
     );
 
     const loans = loansResult.rows;
     
     if (loans.length === 0) {
-      console.log('⏭️  No loans need retroactive extension');
+      console.log('⏭️  No active loans found');
       return 0;
     }
 
