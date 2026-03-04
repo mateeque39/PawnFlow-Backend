@@ -277,11 +277,8 @@ async function retroactiveExtendLoans(pool) {
 
   try {
     console.log('\n🔄 Checking for loans to retroactively extend...');
-    
-    // Start explicit transaction
-    await client.query('BEGIN');
-    
-    // IMPORTANT: Reset extended_this_cycle flag for all loans before checking
+
+    // Reset extended_this_cycle flag for all loans before checking
     // This ensures we check ALL active loans, even if they were extended by interest capitalization
     console.log('   🔄 Resetting extension flags for fresh check...');
     await client.query(
@@ -299,7 +296,6 @@ async function retroactiveExtendLoans(pool) {
     
     if (loans.length === 0) {
       console.log('⏭️  No loans need retroactive extension');
-      await client.query('COMMIT');
       return 0;
     }
 
@@ -433,27 +429,11 @@ async function retroactiveExtendLoans(pool) {
       console.log(`\n✅ Retroactively extended ${extendedCount} loans`);
     }
 
-    // Commit transaction with verification
-    try {
-      console.log('   💾 Committing transaction...');
-      const commitResult = await client.query('COMMIT');
-      console.log('   ✅ Transaction committed successfully');
-    } catch (commitErr) {
-      console.error('   ❌ COMMIT failed:', commitErr.message);
-      throw commitErr;
-    }
-    
+    console.log('✅ Retroactive extension complete');
     return extendedCount;
   } catch (error) {
     console.error('❌ Retroactive extension check failed:', error.message);
     console.error('Error details:', error);
-    try {
-      console.log('   🔄 Rolling back transaction...');
-      await client.query('ROLLBACK');
-      console.log('   ✅ Transaction rolled back');
-    } catch (rollbackErr) {
-      console.error('Error rolling back transaction:', rollbackErr.message);
-    }
     return 0;
   } finally {
     client.release();
