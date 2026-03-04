@@ -312,6 +312,84 @@ app.get('/api/debug/loans/:loanId', async (req, res) => {
   }
 });
 
+// DEBUG ENDPOINT - Test INTERVAL date arithmetic (like retroactive extension uses)
+app.get('/api/debug/test-interval/:loanId', async (req, res) => {
+  try {
+    const loanId = parseInt(req.params.loanId, 10);
+    
+    console.log(`\n🔍 DETAILED INTERVAL TEST FOR LOAN #${loanId}`);
+    
+    // STEP 1: Read current state
+    const currentState = await pool.query(
+      'SELECT id, due_date, extended_this_cycle FROM loans WHERE id = $1',
+      [loanId]
+    );
+    
+    if (currentState.rows.length === 0) {
+      return res.status(404).json({ message: 'Loan not found' });
+    }
+    
+    const loan = currentState.rows[0];
+    console.log(`  Current due_date: ${loan.due_date} (type: ${typeof loan.due_date})`);
+    console.log(`  Current extended_this_cycle: ${loan.extended_this_cycle}`);
+    
+    // STEP 2: Execute UPDATE with INTERVAL arithmetic
+    console.log(`  🔄 Executing: UPDATE loans SET due_date = due_date + INTERVAL '1 month'...`);
+    const intervalUpdateResult = await pool.query(
+      `UPDATE loans SET due_date = due_date + INTERVAL '1 month', updated_at = CURRENT_TIMESTAMP WHERE id = $1 RETURNING id, due_date`,
+      [loanId]
+    );
+    
+    console.log(`  ✅ UPDATE INTERVAL returned ${intervalUpdateResult.rows.length} rows`);
+    if (intervalUpdateResult.rows.length > 0) {
+      console.log(`     RETURNING due_date: ${intervalUpdateResult.rows[0].due_date}`);
+    }
+    
+    // STEP 3: Read back immediately
+    console.log(`  🔍 Reading back immediately after UPDATE...`);
+    const verifyImmediate = await pool.query(
+      'SELECT id, due_date, extended_this_cycle FROM loans WHERE id = $1',
+      [loanId]
+    );
+    
+    if (verifyImmediate.rows.length > 0) {
+      console.log(`     After-update due_date: ${verifyImmediate.rows[0].due_date}`);
+    }
+    
+    // STEP 4: Set extended_this_cycle flag
+    console.log(`  🔄 Executing: UPDATE extended_this_cycle = true...`);
+    const flagUpdateResult = await pool.query(
+      `UPDATE loans SET extended_this_cycle = true WHERE id = $1 RETURNING id, extended_this_cycle`,
+      [loanId]
+    );
+    console.log(`  ✅ FLAG UPDATE returned ${flagUpdateResult.rows.length} rows`);
+    
+    // STEP 5: Final read
+    console.log(`  🔍 Final verification...`);
+    const finalRead = await pool.query(
+      'SELECT id, due_date, extended_this_cycle, updated_at FROM loans WHERE id = $1',
+      [loanId]
+    );
+    
+    res.json({
+      loan_id: loanId,
+      before_update: {
+        due_date: loan.due_date,
+        extended_this_cycle: loan.extended_this_cycle
+      },
+      interval_update_returned: intervalUpdateResult.rows.length > 0 ? intervalUpdateResult.rows[0] : null,
+      after_interval_read: verifyImmediate.rows.length > 0 ? verifyImmediate.rows[0] : null,
+      flag_update_returned: flagUpdateResult.rows.length > 0 ? flagUpdateResult.rows[0] : null,
+      final_read: finalRead.rows.length > 0 ? finalRead.rows[0] : null,
+      dates_changed: loan.due_date !== (finalRead.rows[0]?.due_date)
+    });
+    
+  } catch (err) {
+    console.error('INTERVAL test endpoint error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // DEBUG ENDPOINT - Force update a loan's due date to test if updates work
 app.get('/api/debug/update-loan/:loanId/:newDate', async (req, res) => {
   try {
