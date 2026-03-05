@@ -277,17 +277,15 @@ async function retroactiveExtendLoans(pool) {
   try {
     console.log('\n🔄 Checking for loans to retroactively extend...');
 
-    // Reset the extended_this_cycle flag for ALL loans (not just active, so we catch overdue too)
-    // This allows re-extending loans on each startup (idempotent operation)
-    console.log('   🔄 Resetting extension flags for fresh check...');
-    await pool.query(
-      `UPDATE loans SET extended_this_cycle = false WHERE status IN ('active', 'overdue')`
-    );
-
-    // Get all active AND overdue loans for checking
+    // IMPORTANT: DO NOT reset the flag! If a loan already has extended_this_cycle=true,
+    // it means it was already extended and we should preserve that state.
+    // Only process loans where extended_this_cycle=false
+    
+    // Get all active AND overdue loans that have NOT been retroactively extended yet
     const loansResult = await pool.query(
       `SELECT * FROM loans 
        WHERE status IN ('active', 'overdue')
+       AND extended_this_cycle = false
        ORDER BY id ASC`
     );
 
