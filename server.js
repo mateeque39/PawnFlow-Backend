@@ -185,18 +185,49 @@ pool.query('SELECT NOW()', async (err, res) => {
           console.log(`   Principal: $${principal.toFixed(2)} | Interest (${rate}%): $${correctInterestAmount.toFixed(2)}`);
           console.log(`   Total Payable: $${correctTotalPayable.toFixed(2)} | Remaining: $${correctRemainingBalance.toFixed(2)} | Due: ${correctDueDate}`);
           
-          // CRITICAL: If loan has been retroactively extended, keep the current due_date (don't recalculate)
-          // Only update due_date if the loan has NOT been extended
+          // Smart due_date handling:
+          // - If extended_this_cycle=true, verify the due_date is actually extended (later than calculated)
+          // - If it's still the original date despite being marked extended, recalculate to get correct extension
           let dueDateToUpdate = correctDueDate;
-          if (loan.extended_this_cycle) {
-            console.log(`   ⚠️  Loan is marked as extended - preserving current due_date: ${loan.due_date?.toISOString?.().split('T')[0] || loan.due_date}`);
-            dueDateToUpdate = null; // null means don't update this field
+          if (loan.extended_this_cycle && loan.due_date) {
+            const currentDueDate = loan.due_date.toISOString?.().split('T')[0] || loan.due_date;
+            const isActuallyExtended = currentDueDate > correctDueDate; // Is current date AFTER calculated date?
+            console.log(`   Extended flag check: current=${currentDueDate}, calculated=${correctDueDate}, is_actually_extended=${isActuallyExtended}`);
+            
+            if (isActuallyExtended) {
+              // Already properly extended, preserve it
+              console.log(`   ✅ Due date is properly extended - preserving`);
+              dueDateToUpdate = null; // null means don't update this field
+            } else {
+              // Marked as extended but date isn't actually extended - let it be recalculated
+              console.log(`   ⚠️  Marked extended but date not actually extended - will recalculate`);
+              dueDateToUpdate = correctDueDate;
+            }
           }
           
           // Update ALL fields with correct calculated values
           // CRITICAL: Do NOT use COALESCE - directly set the values
           // If due_date is null, we'll construct the query to not include it
-          if (dueDateToUpdate) {
+          if (dueDateToUpdate === null) {
+            // Don't update due_date for properly extended loans
+            await pool.query(
+              `UPDATE loans 
+               SET loan_amount = $1,
+                   initial_loan_amount = $1,
+                   interest_amount = $2, 
+                   total_payable_amount = $3, 
+                   remaining_balance = $4
+               WHERE id = $5`,
+              [
+                principal,
+                correctInterestAmount,
+                correctTotalPayable,
+                correctRemainingBalance,
+                loan.id
+              ]
+            );
+          } else {
+            // Update all fields including due_date
             await pool.query(
               `UPDATE loans 
                SET loan_amount = $1,
@@ -212,24 +243,6 @@ pool.query('SELECT NOW()', async (err, res) => {
                 correctTotalPayable,
                 correctRemainingBalance,
                 dueDateToUpdate,
-                loan.id
-              ]
-            );
-          } else {
-            // Don't update due_date for extended loans
-            await pool.query(
-              `UPDATE loans 
-               SET loan_amount = $1,
-                   initial_loan_amount = $1,
-                   interest_amount = $2, 
-                   total_payable_amount = $3, 
-                   remaining_balance = $4
-               WHERE id = $5`,
-              [
-                principal,
-                correctInterestAmount,
-                correctTotalPayable,
-                correctRemainingBalance,
                 loan.id
               ]
             );
