@@ -277,11 +277,11 @@ async function retroactiveExtendLoans(pool) {
   try {
     console.log('\n🔄 Checking for loans to retroactively extend...');
 
-    // Reset the extended_this_cycle flag for ALL loans (not just active, so we catch overdue too)
-    // This allows re-extending loans on each startup (idempotent operation)
-    console.log('   🔄 Resetting extension flags for fresh check...');
+    // Reset the extended_this_cycle flag ONLY for loans that haven't been extended yet
+    // This prevents re-extending already-extended loans on startup
+    console.log('   🔄 Resetting extension flags for loans not yet extended...');
     await pool.query(
-      `UPDATE loans SET extended_this_cycle = false WHERE status IN ('active', 'overdue')`
+      `UPDATE loans SET extended_this_cycle = false WHERE status IN ('active', 'overdue') AND extended_this_cycle != true`
     );
 
     // Get all active AND overdue loans for checking
@@ -383,6 +383,12 @@ async function retroactiveExtendLoans(pool) {
         if (qualifies) {
           console.log(`      ✅ EXTENSION QUALIFIED`);
           
+          // BUT: Skip re-extending loans that are already extended this cycle
+          // These should persist from the database and NOT be recalculated
+          if (loan.extended_this_cycle) {
+            console.log(`      ⏭️  SKIPPED: Already extended this cycle - preserving existing extension`);
+          } else {
+            
           // Calculate new due date EXACTLY like migrate-on-startup.js does (proven to work)
           const dueDate = new Date(loan.due_date);
           console.log(`      [PRE-SETMONTH] dueDate=${dueDate.toISOString()}, getMonth()=${dueDate.getMonth()}`);
@@ -451,6 +457,7 @@ async function retroactiveExtendLoans(pool) {
             }
           } catch (updateErr) {
             console.error(`  ❌ Loan #${loan.id}: UPDATE FAILED - ${updateErr.message}`);
+          }
           }
         } else {
           console.log(`      ⏭️  Skipped: hasPayments=${hasPayments}, totalPaid >= required=${totalPaid >= requiredInterest}`);
