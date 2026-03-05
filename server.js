@@ -143,9 +143,6 @@ pool.query('SELECT NOW()', async (err, res) => {
       }
 
       // AUTO-FIX ALL CORRUPTED LOANS ON STARTUP (runs AFTER migration to overwrite any corruptions)
-      // TEMPORARILY DISABLED TO DEBUG RETROACTIVE EXTENSION ISSUE
-      console.log('\n🔧 AUTO-FIX TEMPORARILY DISABLED FOR DEBUGGING\n');
-      /*
       console.log('\n🔧 AUTO-FIXING ALL CORRUPTED LOAN CALCULATIONS...\n');
       try {
         // Get all loans with all needed fields - MUST include extended_this_cycle for smart logic
@@ -274,7 +271,6 @@ pool.query('SELECT NOW()', async (err, res) => {
       } catch (autoFixErr) {
         console.error('❌ AUTO-FIX ERROR:', autoFixErr.message);
       }
-      */
       
       // Start HTTP server
       console.log('⚙️  Starting PawnFlow Server...');
