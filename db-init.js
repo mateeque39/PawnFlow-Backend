@@ -443,9 +443,16 @@ async function retroactiveExtendLoans(pool) {
               
               // STEP 4: COMMIT the transaction to force persistent write
               await client.query('COMMIT');
-              console.log(`      [COMMIT] Transaction committed to database`);
+              console.log(`      [COMMIT] Transaction committed`);
               
-              // STEP 5: Verify AFTER commit from a new connection
+              // Release client AFTER everything is done
+              client.release();
+              console.log(`      [CLIENT] Connection released back to pool`);
+              
+              // STEP 5: Wait 500ms to ensure WAL is flushed
+              await new Promise(resolve => setTimeout(resolve, 500));
+              
+              // STEP 6: Verify AFTER commit from a NEW connection to bypass any caching
               const postCommitVerify = await pool.query(
                 'SELECT id, due_date, extended_this_cycle, updated_at FROM loans WHERE id = $1',
                 [loan.id]
@@ -468,6 +475,7 @@ async function retroactiveExtendLoans(pool) {
               console.log(`  ❌ Loan #${loan.id}: UPDATE returned 0 rows - possibly already updated`);
               // Still commit even if no rows updated
               await client.query('COMMIT');
+              client.release();
             }
           } catch (updateErr) {
             console.error(`  ❌ Loan #${loan.id}: UPDATE FAILED - ${updateErr.message}`);
@@ -479,9 +487,12 @@ async function retroactiveExtendLoans(pool) {
               console.error(`      ROLLBACK FAILED:`, rollbackErr.message);
             }
           } finally {
-            if (client) {
-              client.release();
-              console.log(`      [CLIENT] Connection released back to pool`);
+            if (client && client._connected !== false) {
+              try {
+                client.release();
+              } catch (releaseErr) {
+                // Already released, ignore
+              }
             }
           }
         } else {
