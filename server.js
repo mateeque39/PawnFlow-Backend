@@ -673,6 +673,51 @@ app.get('/api/debug/test-retroactive/:loanId', async (req, res) => {
   }
 });
 
+// DEBUG ENDPOINT - Reset and re-run retroactive extension for all compatible loans
+app.get('/api/debug/reset-and-extend', async (req, res) => {
+  try {
+    console.log(`\n🔬 MANUAL RETROACTIVE EXTENSION RESET & RE-RUN`);
+    
+    // Reset extended_this_cycle flag for all loans so they can be re-evaluated
+    console.log(`  🔄 Step 1: Resetting extended_this_cycle flags...`);
+    const resetResult = await pool.query(
+      `UPDATE loans SET extended_this_cycle = false WHERE status IN ('active', 'overdue') RETURNING id, status`
+    );
+    console.log(`  ✅ Reset ${resetResult.rows.length} loans`);
+    
+    // Re-run retroactive extension
+    console.log(`  🔄 Step 2: Running retroactive extension...`);
+    const extendedCount = await retroactiveExtendLoans(pool);
+    console.log(`  ✅ Extended ${extendedCount} loans`);
+    
+    // Check the results for loans 8, 9, 11
+    console.log(`  🔄 Step 3: Verifying results...`);
+    const verifyResult = await pool.query(
+      'SELECT id, due_date, extended_this_cycle, status FROM loans WHERE id IN (8, 9, 11) ORDER BY id'
+    );
+    
+    const results = verifyResult.rows.map(row => ({
+      id: row.id,
+      due_date: row.due_date.toISOString().split('T')[0],
+      extended: row.extended_this_cycle,
+      status: row.status
+    }));
+    
+    console.log(`  Verification results:`, results);
+    
+    res.json({
+      operation: 'reset_and_extend',
+      reset_count: resetResult.rows.length,
+      extended_count: extendedCount,
+      verification: results
+    });
+    
+  } catch (err) {
+    console.error('Reset and extend endpoint error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ======================== STANDARD ENDPOINTS ========================
 
 // Get current date in EST timezone (YYYY-MM-DD format)
