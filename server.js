@@ -514,6 +514,123 @@ app.get('/api/debug/update-loan/:loanId/:newDate', async (req, res) => {
   }
 });
 
+// DEBUG ENDPOINT - Manually run retroactive extension logic for a single loan to diagnose why it's not persisting
+app.get('/api/debug/test-retroactive/:loanId', async (req, res) => {
+  try {
+    const loanId = parseInt(req.params.loanId, 10);
+    console.log(`\n🔬 MANUAL RETROACTIVE EXTENSION TEST FOR LOAN #${loanId}`);
+    
+    const steps = [];
+    
+    // STEP 1: Read current state
+    const currentState = await pool.query(
+      'SELECT id, due_date, interest_amount, extended_this_cycle FROM loans WHERE id = $1',
+      [loanId]
+    );
+    
+    if (currentState.rows.length === 0) {
+      return res.status(404).json({ message: 'Loan not found' });
+    }
+    
+    const loan = currentState.rows[0];
+    const beforeDate = loan.due_date.toISOString().split('T')[0];
+    steps.push({
+      step: 'Read current state',
+      due_date: beforeDate,
+      extended_this_cycle: loan.extended_this_cycle,
+      interest_amount: loan.interest_amount
+    });
+    
+    console.log(`  Before: due_date=${beforeDate}, extended=${loan.extended_this_cycle}, interest=${loan.interest_amount}`);
+    
+    // STEP 2: Calculate new due date (same logic as retroactiveExtendLoans)
+    const dueDate = new Date(loan.due_date);
+    dueDate.setMonth(dueDate.getMonth() + 1);
+    const year = dueDate.getFullYear();
+    const month = String(dueDate.getMonth() + 1).padStart(2, '0');
+    const day = String(dueDate.getDate()).padStart(2, '0');
+    const newDueDate = `${year}-${month}-${day}`;
+    
+    console.log(`  Calculated new due_date: ${newDueDate}`);
+    steps.push({ step: 'Calculate new date', new_date: newDueDate });
+    
+    // STEP 3: Extract qualified payments (simplified logic)
+    const paymentHistoryResult = await pool.query(
+      `SELECT SUM(CAST(payment_amount AS NUMERIC)) as total_paid FROM payment_history WHERE loan_id = $1`,
+      [loanId]
+    );
+    const totalPaid = parseFloat(paymentHistoryResult.rows[0]?.total_paid || 0);
+    const requiredInterest = parseFloat(loan.interest_amount || 0);
+    const qualifies = totalPaid >= requiredInterest;
+    
+    console.log(`  Qualifies: totalPaid=$${totalPaid.toFixed(2)} >= required=$${requiredInterest.toFixed(2)} = ${qualifies}`);
+    steps.push({ step: 'Check qualification', total_paid: totalPaid, required: requiredInterest, qualifies });
+    
+    if (!qualifies) {
+      return res.json({ loan_id: loanId, message: 'Loan does not qualify', steps });
+    }
+    
+    // STEP 4: Update due_date using same SQL as retroactiveExtendLoans
+    console.log(`  🔄 Executing UPDATE due_date with TO_DATE...`);
+    const updateResult = await pool.query(
+      `UPDATE loans SET due_date = TO_DATE($1, 'YYYY-MM-DD'), updated_at = CURRENT_TIMESTAMP WHERE id = $2 RETURNING id, due_date`,
+      [newDueDate, loanId]
+    );
+    
+    const afterDateUpdate = updateResult.rows.length > 0 ? updateResult.rows[0].due_date.toISOString().split('T')[0] : null;
+    console.log(`  ✅ UPDATE returned due_date: ${afterDateUpdate}`);
+    steps.push({ step: 'UPDATE due_date', rows_returned: updateResult.rows.length, returned_value: afterDateUpdate });
+    
+    // STEP 5: Update extended_this_cycle flag
+    console.log(`  🔄 Executing UPDATE extended_this_cycle...`);
+    const flagResult = await pool.query(
+      `UPDATE loans SET extended_this_cycle = true WHERE id = $1 RETURNING id, extended_this_cycle`,
+      [loanId]
+    );
+    console.log(`  ✅ FLAG UPDATE returned ${flagResult.rows.length} rows`);
+    steps.push({ step: 'UPDATE extended_this_cycle', rows_returned: flagResult.rows.length });
+    
+    // STEP 6: Wait briefly
+    await new Promise(resolve => setTimeout(resolve, 100));
+    
+    // STEP 7: Verify from fresh query
+    console.log(`  🔍 Verifying with fresh query...`);
+    const verifyResult = await pool.query(
+      'SELECT id, due_date, extended_this_cycle, updated_at FROM loans WHERE id = $1',
+      [loanId]
+    );
+    
+    const afterDate = verifyResult.rows.length > 0 ? verifyResult.rows[0].due_date.toISOString().split('T')[0] : null;
+    const updatedFlag = verifyResult.rows.length > 0 ? verifyResult.rows[0].extended_this_cycle : null;
+    console.log(`  Verify: due_date=${afterDate}, extended=${updatedFlag}`);
+    steps.push({ step: 'Verify after updates', due_date: afterDate, extended_this_cycle: updatedFlag });
+    
+    // Compare
+    const dateChanged = beforeDate !== afterDate;
+    const flagChanged = !loan.extended_this_cycle && updatedFlag === true;
+    
+    console.log(`\n  📊 RESULTS:`);
+    console.log(`     Date changed: ${dateChanged ? '✅ YES' : '❌ NO'} (${beforeDate} → ${afterDate})`);
+    console.log(`     Flag changed: ${flagChanged ? '✅ YES' : '❌ NO'}`);
+    console.log(`     Both persisted: ${dateChanged && flagChanged ? '✅ YES' : '❌ NO'}`);
+    
+    res.json({
+      loan_id: loanId,
+      qualifies,
+      before: { due_date: beforeDate, extended: loan.extended_this_cycle },
+      after: { due_date: afterDate, extended: updatedFlag },
+      date_changed: dateChanged,
+      flag_changed: flagChanged,
+      both_persisted: dateChanged && flagChanged,
+      steps
+    });
+    
+  } catch (err) {
+    console.error('Retroactive test endpoint error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ======================== STANDARD ENDPOINTS ========================
 
 // Get current date in EST timezone (YYYY-MM-DD format)
