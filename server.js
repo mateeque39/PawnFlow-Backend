@@ -690,26 +690,31 @@ app.get('/api/debug/reset-and-extend', async (req, res) => {
     const extendedCount = await retroactiveExtendLoans(pool);
     console.log(`  ✅ Extended ${extendedCount} loans`);
     
+    // Wait a bit for database consistency
+    await new Promise(resolve => setTimeout(resolve, 500));
+    
     // Check the results for loans 8, 9, 11
-    console.log(`  🔄 Step 3: Verifying results...`);
+    console.log(`  🔄 Step 3: Verifying results with FRESH query from pool...`);
     const verifyResult = await pool.query(
-      'SELECT id, due_date, extended_this_cycle, status FROM loans WHERE id IN (8, 9, 11) ORDER BY id'
+      'SELECT id, due_date, extended_this_cycle, status, updated_at FROM loans WHERE id IN (8, 9, 11) ORDER BY id'
     );
     
     const results = verifyResult.rows.map(row => ({
       id: row.id,
       due_date: row.due_date.toISOString().split('T')[0],
       extended: row.extended_this_cycle,
-      status: row.status
+      status: row.status,
+      updated_at: row.updated_at.toISOString()
     }));
     
-    console.log(`  Verification results:`, results);
+    console.log(`  Verification results:`, JSON.stringify(results, null, 2));
     
     res.json({
       operation: 'reset_and_extend',
       reset_count: resetResult.rows.length,
       extended_count: extendedCount,
-      verification: results
+      verification: results,
+      note: 'If dates are still old despite extended=true, check AUTO-FIX or use direct test-retroactive endpoint'
     });
     
   } catch (err) {
