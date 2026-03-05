@@ -390,6 +390,86 @@ app.get('/api/debug/test-interval/:loanId', async (req, res) => {
   }
 });
 
+// DEBUG ENDPOINT - Test different SQL syntaxes to find which ones actually persist
+app.get('/api/debug/test-sql-syntax/:loanId', async (req, res) => {
+  try {
+    const loanId = parseInt(req.params.loanId, 10);
+    const testDate = '2099-12-31'; // Use obviously different date to prove it changed
+    
+    console.log(`\n🔬 SQL SYNTAX TEST FOR LOAN #${loanId}`);
+    
+    // Read initial state
+    const initial = await pool.query('SELECT due_date FROM loans WHERE id = $1', [loanId]);
+    const initialDate = initial.rows[0]?.due_date.toISOString().split('T')[0];
+    console.log(`  Initial due_date: ${initialDate}`);
+    
+    const results = {};
+    
+    // Test 1: TO_DATE with parameterized value
+    try {
+      console.log(`  Test 1: TO_DATE($1, 'YYYY-MM-DD')`);
+      const result1 = await pool.query(
+        `UPDATE loans SET due_date = TO_DATE($1, 'YYYY-MM-DD') WHERE id = $2 RETURNING due_date`,
+        [testDate, loanId]
+      );
+      const verify1 = await pool.query('SELECT due_date FROM loans WHERE id = $1', [loanId]);
+      results['TO_DATE'] = {
+        update_returned: result1.rows[0]?.due_date,
+        db_current: verify1.rows[0]?.due_date.toISOString().split('T')[0]
+      };
+      console.log(`    UPDATED: ${result1.rows[0]?.due_date}, DB NOW: ${results['TO_DATE'].db_current}`);
+    } catch (e) { results['TO_DATE'] = { error: e.message }; }
+    
+    // Test 2: CAST($1 AS DATE)
+    try {
+      console.log(`  Test 2: CAST($1 AS DATE)`);
+      const result2 = await pool.query(
+        `UPDATE loans SET due_date = CAST($1 AS DATE) WHERE id = $2 RETURNING due_date`,
+        [testDate, loanId]
+      );
+      const verify2 = await pool.query('SELECT due_date FROM loans WHERE id = $1', [loanId]);
+      results['CAST'] = {
+        update_returned: result2.rows[0]?.due_date,
+        db_current: verify2.rows[0]?.due_date.toISOString().split('T')[0]
+      };
+      console.log(`    UPDATED: ${result2.rows[0]?.due_date}, DB NOW: ${results['CAST'].db_current}`);
+    } catch (e) { results['CAST'] = { error: e.message }; }
+    
+    // Test 3: $1::DATE
+    try {
+      console.log(`  Test 3: $1::DATE`);
+      const result3 = await pool.query(
+        `UPDATE loans SET due_date = $1::DATE WHERE id = $2 RETURNING due_date`,
+        [testDate, loanId]
+      );
+      const verify3 = await pool.query('SELECT due_date FROM loans WHERE id = $1', [loanId]);
+      results['::DATE'] = {
+        update_returned: result3.rows[0]?.due_date,
+        db_current: verify3.rows[0]?.due_date.toISOString().split('T')[0]
+      };
+      console.log(`    UPDATED: ${result3.rows[0]?.due_date}, DB NOW: ${results['::DATE'].db_current}`);
+    } catch (e) { results['::DATE'] = { error: e.message }; }
+    
+    // Read final state
+    const final = await pool.query('SELECT due_date FROM loans WHERE id = $1', [loanId]);
+    const finalDate = final.rows[0]?.due_date.toISOString().split('T')[0];
+    console.log(`  Final due_date: ${finalDate}`);
+    
+    res.json({
+      loan_id: loanId,
+      initial_date: initialDate,
+      final_date: finalDate,
+      test_date_attempted: testDate,
+      dates_changed: initialDate !== finalDate,
+      test_results: results
+    });
+    
+  } catch (err) {
+    console.error('SQL syntax test error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // DEBUG ENDPOINT - Force update a loan's due date to test if updates work
 app.get('/api/debug/update-loan/:loanId/:newDate', async (req, res) => {
   try {
