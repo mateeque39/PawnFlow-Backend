@@ -143,7 +143,10 @@ pool.query('SELECT NOW()', async (err, res) => {
       }
 
       // AUTO-FIX ALL CORRUPTED LOANS ON STARTUP (runs AFTER migration to overwrite any corruptions)
-      console.log('\n🔧 AUTO-FIXING ALL CORRUPTED LOAN CALCULATIONS...\n');
+      // DISABLED: Manual fixes applied - AUTO-FIX was recalculating extended loans incorrectly
+      console.log('\n⏭️  AUTO-FIX DISABLED - Using manual corrections only\n');
+      const autoFixDisabled = true;
+      if (!autoFixDisabled) {
       try {
         // Get all loans with all needed fields - MUST include extended_this_cycle for smart logic
         const allLoans = await pool.query(
@@ -277,6 +280,7 @@ pool.query('SELECT NOW()', async (err, res) => {
       } catch (autoFixErr) {
         console.error('❌ AUTO-FIX ERROR:', autoFixErr.message);
       }
+      } // End of disabled AUTO-FIX block
       
       // Start HTTP server
       console.log('⚙️  Starting PawnFlow Server...');
