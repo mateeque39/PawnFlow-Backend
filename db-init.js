@@ -394,18 +394,10 @@ async function retroactiveExtendLoans(pool) {
           console.log(`      [DEBUG] Calculated newDueDate="${newDueDate}" (String type) from loan.due_date="${loan.due_date}"`);
           console.log(`      [DEBUG] Parameter value type: ${typeof newDueDate}, value: "${newDueDate}"`);
           
-          // STEP 1: Use explicit transaction to force real commit to disk
-          let client;
+          // STEP 1: Simple pool.query without transaction (proven to work)
           try {
-            // Get a dedicated client for this transaction
-            client = await pool.connect();
-            
-            // Start explicit transaction
-            await client.query('BEGIN');
-            console.log(`      [DEBUG] Transaction started with explicit BEGIN`);
-            
-            // Execute update
-            const updateResult = await client.query(
+            // Execute update using TO_DATE (proven to work in test endpoint)
+            const updateResult = await pool.query(
               `UPDATE loans SET due_date = TO_DATE($1, 'YYYY-MM-DD'), updated_at = CURRENT_TIMESTAMP WHERE id = $2 RETURNING id, due_date`,
               [newDueDate, loan.id]
             );
@@ -420,14 +412,18 @@ async function retroactiveExtendLoans(pool) {
               console.log(`      [RETURNING] due_date="${updatedLoan.due_date}" (type: ${typeof updatedLoan.due_date})`);
               
               // STEP 2: Update extended_this_cycle flag within same transaction
-              const flagResult = await client.query(
+              // STEP 2: Update extended_this_cycle flag (simple pool.query)
+              const flagResult = await pool.query(
                 `UPDATE loans SET extended_this_cycle = true WHERE id = $1 RETURNING id, extended_this_cycle`,
                 [loan.id]
               );
               console.log(`      [UPDATE FLAG] Query returned ${flagResult.rows.length} rows`);
               
-              // STEP 3: Verify BEFORE commit but within transaction
-              const verifyResult = await client.query(
+              // STEP 3: Wait briefly to allow database flush
+              await new Promise(resolve => setTimeout(resolve, 100));
+              
+              // STEP 4: Verify from fresh connection
+              const verifyResult = await pool.query(
                 'SELECT id, due_date, extended_this_cycle, updated_at FROM loans WHERE id = $1',
                 [loan.id]
               );
@@ -437,63 +433,19 @@ async function retroactiveExtendLoans(pool) {
                 const dbDueDate = verified.due_date.toISOString().split('T')[0];
                 const datesMatch = dbDueDate === newDueDate;
                 
-                console.log(`      ✓ Pre-commit verify: due_date=${dbDueDate}, extended=${verified.extended_this_cycle}`);
-                console.log(`      ✓ Match: ${datesMatch ? '✅ YES' : '❌ NO'}`);
-              }
-              
-              // STEP 4: COMMIT the transaction to force persistent write
-              await client.query('COMMIT');
-              console.log(`      [COMMIT] Transaction committed`);
-              
-              // Release client AFTER everything is done
-              client.release();
-              console.log(`      [CLIENT] Connection released back to pool`);
-              
-              // STEP 5: Wait 500ms to ensure WAL is flushed
-              await new Promise(resolve => setTimeout(resolve, 500));
-              
-              // STEP 6: Verify AFTER commit from a NEW connection to bypass any caching
-              const postCommitVerify = await pool.query(
-                'SELECT id, due_date, extended_this_cycle, updated_at FROM loans WHERE id = $1',
-                [loan.id]
-              );
-              
-              if (postCommitVerify.rows.length > 0) {
-                const verified = postCommitVerify.rows[0];
-                const dbDueDate = verified.due_date.toISOString().split('T')[0];
-                const datesMatch = dbDueDate === newDueDate;
-                
                 console.log(`  ✅ Loan #${loan.id}: Extended due_date to ${newDueDate}`);
-                console.log(`      ✓ Post-commit DB: due_date=${dbDueDate}, extended=${verified.extended_this_cycle}`);
-                console.log(`      ✓ Final match: ${datesMatch ? '✅ YES' : '❌ NO'}`);
+                console.log(`      ✓ Verified in DB: due_date=${dbDueDate}, extended=${verified.extended_this_cycle}`);
+                console.log(`      ✓ Match: ${datesMatch ? '✅ YES' : '❌ NO'}`);
                 if (!datesMatch) {
-                  console.error(`      🚨 CRITICAL: Expected ${newDueDate} but got ${dbDueDate}`);
+                  console.error(`      🚨 FAILED: Expected ${newDueDate} but got ${dbDueDate}`);
                 }
                 console.log(`      (Paid: $${totalPaid.toFixed(2)} interest, Required: $${requiredInterest.toFixed(2)})`);
               }
             } else {
-              console.log(`  ❌ Loan #${loan.id}: UPDATE returned 0 rows - possibly already updated`);
-              // Still commit even if no rows updated
-              await client.query('COMMIT');
-              client.release();
+              console.log(`  ❌ Loan #${loan.id}: UPDATE returned 0 rows`);
             }
           } catch (updateErr) {
             console.error(`  ❌ Loan #${loan.id}: UPDATE FAILED - ${updateErr.message}`);
-            console.error(`      Full error:`, updateErr);
-            try {
-              await client.query('ROLLBACK');
-              console.error(`      ROLLBACK executed`);
-            } catch (rollbackErr) {
-              console.error(`      ROLLBACK FAILED:`, rollbackErr.message);
-            }
-          } finally {
-            if (client && client._connected !== false) {
-              try {
-                client.release();
-              } catch (releaseErr) {
-                // Already released, ignore
-              }
-            }
           }
         } else {
           console.log(`      ⏭️  Skipped: hasPayments=${hasPayments}, totalPaid >= required=${totalPaid >= requiredInterest}`);
