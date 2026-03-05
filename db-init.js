@@ -385,7 +385,11 @@ async function retroactiveExtendLoans(pool) {
           
           // Calculate new due date EXACTLY like migrate-on-startup.js does (proven to work)
           const dueDate = new Date(loan.due_date);
+          console.log(`      [PRE-SETMONTH] dueDate=${dueDate.toISOString()}, getMonth()=${dueDate.getMonth()}`);
+          
           dueDate.setMonth(dueDate.getMonth() + 1);
+          console.log(`      [POST-SETMONTH] dueDate=${dueDate.toISOString()}, getMonth()=${dueDate.getMonth()}`);
+          
           const year = dueDate.getFullYear();
           const month = String(dueDate.getMonth() + 1).padStart(2, '0');
           const day = String(dueDate.getDate()).padStart(2, '0');
@@ -393,7 +397,7 @@ async function retroactiveExtendLoans(pool) {
 
           console.log(`      [DEBUG] Calculated newDueDate="${newDueDate}" (String type) from loan.due_date="${loan.due_date}"`);
           console.log(`      [DEBUG] Parameter value type: ${typeof newDueDate}, value: "${newDueDate}"`);
-          
+          console.log(`      [DEBUG BEFORE UPDATE] About to execute UPDATE with params: newDate="${newDueDate}", loanId=${loan.id}`);
           // STEP 1: Simple pool.query without transaction (proven to work)
           try {
             // Execute update using TO_DATE (proven to work in test endpoint)
@@ -410,6 +414,7 @@ async function retroactiveExtendLoans(pool) {
               
               // Log what the RETURNING clause gave us
               console.log(`      [RETURNING] due_date="${updatedLoan.due_date}" (type: ${typeof updatedLoan.due_date})`);
+              console.log(`      [IMMEDIATELY AFTER UPDATE] extendedCount incremented to ${extendedCount}`);
               
               // STEP 2: Update extended_this_cycle flag within same transaction
               // STEP 2: Update extended_this_cycle flag (simple pool.query)
