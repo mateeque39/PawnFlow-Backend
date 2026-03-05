@@ -185,26 +185,55 @@ pool.query('SELECT NOW()', async (err, res) => {
           console.log(`   Principal: $${principal.toFixed(2)} | Interest (${rate}%): $${correctInterestAmount.toFixed(2)}`);
           console.log(`   Total Payable: $${correctTotalPayable.toFixed(2)} | Remaining: $${correctRemainingBalance.toFixed(2)} | Due: ${correctDueDate}`);
           
+          // CRITICAL: If loan has been retroactively extended, keep the current due_date (don't recalculate)
+          // Only update due_date if the loan has NOT been extended
+          let dueDateToUpdate = correctDueDate;
+          if (loan.extended_this_cycle) {
+            console.log(`   ⚠️  Loan is marked as extended - preserving current due_date: ${loan.due_date?.toISOString?.().split('T')[0] || loan.due_date}`);
+            dueDateToUpdate = null; // null means don't update this field
+          }
+          
           // Update ALL fields with correct calculated values
           // CRITICAL: Do NOT use COALESCE - directly set the values
-          await pool.query(
-            `UPDATE loans 
-             SET loan_amount = $1,
-                 initial_loan_amount = $1,
-                 interest_amount = $2, 
-                 total_payable_amount = $3, 
-                 remaining_balance = $4,
-                 due_date = $5
-             WHERE id = $6`,
-            [
-              principal,
-              correctInterestAmount,
-              correctTotalPayable,
-              correctRemainingBalance,
-              correctDueDate,
-              loan.id
-            ]
-          );
+          // If due_date is null, we'll construct the query to not include it
+          if (dueDateToUpdate) {
+            await pool.query(
+              `UPDATE loans 
+               SET loan_amount = $1,
+                   initial_loan_amount = $1,
+                   interest_amount = $2, 
+                   total_payable_amount = $3, 
+                   remaining_balance = $4,
+                   due_date = $5
+               WHERE id = $6`,
+              [
+                principal,
+                correctInterestAmount,
+                correctTotalPayable,
+                correctRemainingBalance,
+                dueDateToUpdate,
+                loan.id
+              ]
+            );
+          } else {
+            // Don't update due_date for extended loans
+            await pool.query(
+              `UPDATE loans 
+               SET loan_amount = $1,
+                   initial_loan_amount = $1,
+                   interest_amount = $2, 
+                   total_payable_amount = $3, 
+                   remaining_balance = $4
+               WHERE id = $5`,
+              [
+                principal,
+                correctInterestAmount,
+                correctTotalPayable,
+                correctRemainingBalance,
+                loan.id
+              ]
+            );
+          }
           
           fixedCount++;
           
