@@ -101,19 +101,39 @@ async function checkLoanQualifiesForExtension(client, loan) {
 }
 
 /**
- * Extend a single loan
+ * Extend a single loan - FIXED to recalculate all fields
  */
-async function extendLoan(client, loanId, newDueDate) {
+async function extendLoan(client, loanId, newDueDate, loan) {
+  // When extending, recalculate all loan state fields
+  const principal = parseFloat(loan.loan_amount || 0);
+  const interestRate = parseFloat(loan.interest_rate || 0);
+  
+  // Calculate interest for next cycle
+  const nextCycleInterest = Math.round((principal * interestRate / 100) * 100) / 100;
+  
+  // After auto-extend, remaining balance = principal + next cycle interest
+  const newRemainingBalance = principal + nextCycleInterest;
+  
+  console.log(`   📊 Recalculating after extension:`);
+  console.log(`      Principal: $${principal.toFixed(2)}`);
+  console.log(`      Interest Rate: ${interestRate}%`);
+  console.log(`      Next Cycle Interest: $${nextCycleInterest.toFixed(2)}`);
+  console.log(`      New Remaining Balance: $${newRemainingBalance.toFixed(2)}`);
+  
   const result = await client.query(
     `UPDATE loans 
      SET 
        due_date = $1,
+       interest_amount = $2,
+       remaining_balance = $3,
        extended_this_cycle = true,
+       interest_paid_this_cycle = 0,
        last_extended_at = CURRENT_TIMESTAMP,
        updated_at = CURRENT_TIMESTAMP
-     WHERE id = $2
-     RETURNING id, due_date, extended_this_cycle, last_extended_at`,
-    [newDueDate, loanId]
+     WHERE id = $4
+     RETURNING id, due_date, extended_this_cycle, last_extended_at, 
+               interest_amount, remaining_balance, interest_paid_this_cycle`,
+    [newDueDate, nextCycleInterest, newRemainingBalance, loanId]
   );
 
   return result.rows[0];
@@ -153,17 +173,21 @@ async function runMigration() {
       const qualification = await checkLoanQualifiesForExtension(client, loan);
       
       if (qualification) {
-        // Extend the loan
-        const updated = await extendLoan(client, qualification.loanId, qualification.newDueDate);
+        // Extend the loan with proper recalculation
+        const updated = await extendLoan(client, qualification.loanId, qualification.newDueDate, loan);
         extendedCount++;
         extendedLoans.push({
           loanId: qualification.loanId,
           originalDueDate: loan.due_date,
           newDueDate: updated.due_date,
-          interestPaid: qualification.totalInterestPaid.toFixed(2)
+          interestPaid: qualification.totalInterestPaid.toFixed(2),
+          newInterestAmount: updated.interest_amount,
+          newRemainingBalance: updated.remaining_balance
         });
         
         console.log(`   🎉 Extended! New due date: ${updated.due_date.toISOString().split('T')[0]}`);
+        console.log(`      New Interest Amount: $${updated.interest_amount}`);
+        console.log(`      New Remaining Balance: $${updated.remaining_balance}`);
       }
     }
 
@@ -181,6 +205,8 @@ async function runMigration() {
         console.log(`   Original Due Date: ${loan.originalDueDate}`);
         console.log(`   New Due Date:      ${loan.newDueDate}`);
         console.log(`   Interest Paid:     $${loan.interestPaid}`);
+        console.log(`   New Interest Amount: $${loan.newInterestAmount}`);
+        console.log(`   New Remaining Balance: $${loan.newRemainingBalance}`);
       });
       console.log('────────────────────────────────────────────────────────────────────\n');
     }
