@@ -190,7 +190,13 @@ pool.query('SELECT NOW()', async (err, res) => {
           // - If it's still the original date despite being marked extended, recalculate to get correct extension
           let dueDateToUpdate = correctDueDate;
           if (loan.extended_this_cycle && loan.due_date) {
-            const currentDueDate = loan.due_date.toISOString?.().split('T')[0] || loan.due_date;
+            // Handle both Date objects and strings from database
+            let currentDueDate = loan.due_date;
+            if (typeof loan.due_date === 'object' && loan.due_date.toISOString) {
+              currentDueDate = loan.due_date.toISOString().split('T')[0];
+            } else if (typeof loan.due_date === 'string') {
+              currentDueDate = loan.due_date.split('T')[0]; // Already a string, extract date part only
+            }
             const isActuallyExtended = currentDueDate > correctDueDate; // Is current date AFTER calculated date?
             console.log(`   Extended flag check: current=${currentDueDate}, calculated=${correctDueDate}, is_actually_extended=${isActuallyExtended}`);
             
