@@ -327,6 +327,15 @@ emailTransporter.verify((error, success) => {
 app.get('/api/debug/loans/:loanId', async (req, res) => {
   try {
     const loanId = parseInt(req.params.loanId, 10);
+    
+    // Disable all caching
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
+    res.set('Pragma', 'no-cache');
+    res.set('Expires', '0');
+    
+    // Add random parameter to force bypass any caching
+    console.log(`🔍 DEBUG: Querying Loan #${loanId} at ${new Date().toISOString()}`);
+    
     const result = await pool.query(
       'SELECT id, due_date, extended_this_cycle, updated_at, loan_amount, interest_amount FROM loans WHERE id = $1',
       [loanId]
@@ -337,7 +346,8 @@ app.get('/api/debug/loans/:loanId', async (req, res) => {
     }
     
     const loan = result.rows[0];
-    console.log(`🔍 DEBUG: Loan #${loanId} from DB:`, loan);
+    const dueDateString = loan.due_date.toISOString?.().split('T')[0] || loan.due_date;
+    console.log(`🔍 DEBUG: Loan #${loanId} from DB: due_date=${dueDateString}, extended=${loan.extended_this_cycle}, updated=${loan.updated_at}`);
     
     res.json({
       loanId,
@@ -346,7 +356,8 @@ app.get('/api/debug/loans/:loanId', async (req, res) => {
       database_updated_at: loan.updated_at,
       loan_amount: loan.loan_amount,
       interest_amount: loan.interest_amount,
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
+      query_executed_at: new Date().toISOString()
     });
   } catch (err) {
     console.error('Debug endpoint error:', err);
