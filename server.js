@@ -145,9 +145,9 @@ pool.query('SELECT NOW()', async (err, res) => {
       // AUTO-FIX ALL CORRUPTED LOANS ON STARTUP (runs AFTER migration to overwrite any corruptions)
       console.log('\n🔧 AUTO-FIXING ALL CORRUPTED LOAN CALCULATIONS...\n');
       try {
-        // Get all loans with all needed fields
+        // Get all loans with all needed fields - MUST include extended_this_cycle for smart logic
         const allLoans = await pool.query(
-          'SELECT id, loan_amount, initial_loan_amount, interest_rate, loan_term, loan_issued_date FROM loans ORDER BY id'
+          'SELECT id, loan_amount, initial_loan_amount, interest_rate, loan_term, loan_issued_date, extended_this_cycle, due_date FROM loans ORDER BY id'
         );
         console.log(`Found ${allLoans.rows.length} loans - recalculating ALL fields\n`);
         
