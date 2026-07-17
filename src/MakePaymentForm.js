@@ -49,12 +49,12 @@ const MakePaymentForm = ({ loggedInUser }) => {
   };
 
   // Download receipt PDF
-  const handleDownloadReceipt = () => {
-    if (!receiptPDF) return;
+  const handleDownloadReceipt = (base64Pdf = receiptPDF, loanData = loan) => {
+    if (!base64Pdf) return;
 
     try {
       // Convert base64 to blob
-      const byteCharacters = atob(receiptPDF);
+      const byteCharacters = atob(base64Pdf);
       const byteNumbers = new Array(byteCharacters.length);
       for (let i = 0; i < byteCharacters.length; i++) {
         byteNumbers[i] = byteCharacters.charCodeAt(i);
@@ -66,12 +66,16 @@ const MakePaymentForm = ({ loggedInUser }) => {
       const url = window.URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
-      link.download = `loan_receipt_${loan.transaction_number || loan.id}.pdf`;
+      link.download = `loan_receipt_${loanData?.transaction_number || loanData?.id || 'payment'}.pdf`;
+      link.style.display = 'none';
       document.body.appendChild(link);
-      link.click();
-      window.URL.revokeObjectURL(url);
-      document.body.removeChild(link);
-      logger.info('Receipt PDF downloaded', { loanId: loan.id });
+      link.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+      logger.info('Receipt PDF download triggered', { loanId: loanData?.id, fileName: link.download });
+
+      setTimeout(() => {
+        window.URL.revokeObjectURL(url);
+        document.body.removeChild(link);
+      }, 1000);
     } catch (error) {
       console.error('Error downloading receipt:', error);
       setMessage('Error downloading receipt PDF');
@@ -109,14 +113,16 @@ const MakePaymentForm = ({ loggedInUser }) => {
         redemptionFee: (willFullyPay && redemptionFee) ? parseFloat(redemptionFee) : undefined
       });
 
+      const responseData = response.data || response;
+      console.log('[MakePaymentForm] payment response data:', responseData);
+      logger.debug('Payment response data', responseData);
+
       // Build success message with auto-extension info
       let successMsg = "✅ Payment successfully processed!";
       
       // Check if auto-extension was triggered
-      if (response.paymentDetails?.autoExtendTriggered) {
-        const oldDate = new Date(response.paymentDetails.newDueDate);
-        // The oldDate now is actually the new due date after extension
-        // We need to calculate what the previous due date was
+      if (responseData.paymentDetails?.autoExtendTriggered) {
+        const oldDate = new Date(responseData.paymentDetails.newDueDate);
         const previousDate = new Date(oldDate);
         previousDate.setMonth(previousDate.getMonth() - 1);
         
@@ -124,36 +130,39 @@ const MakePaymentForm = ({ loggedInUser }) => {
           `✓ Payment: $${parseFloat(paymentAmount).toFixed(2)}\n` +
           `✓ Interest-only payment recognized\n` +
           `✓ Due date extended from ${previousDate.toLocaleDateString()} → ${oldDate.toLocaleDateString()}\n` +
-          `✓ New interest: $${response.paymentDetails.newInterestAmount} charged for next cycle\n` +
-          `✓ Principal: $${response.paymentDetails.newPrincipal} (unchanged)\n\n` +
+          `✓ New interest: $${responseData.paymentDetails.newInterestAmount} charged for next cycle\n` +
+          `✓ Principal: $${responseData.paymentDetails.newPrincipal} (unchanged)\n\n` +
           `📨 Receipt PDF with updated details is ready!`;
         setLoanDueDateExtended(true);
-      } else if (response.loan?.remaining_balance === 0) {
+      } else if (responseData.loan?.remaining_balance === 0) {
         successMsg = "🎉 Payment successful! Loan is now fully paid and automatically redeemed!";
       } else {
         successMsg = `✅ Payment of $${parseFloat(paymentAmount).toFixed(2)} successfully applied.\n` +
-          `📊 New remaining balance: $${response.loan?.remaining_balance?.toFixed(2) || 0}`;
+          `📊 New remaining balance: $${responseData.loan?.remaining_balance?.toFixed(2) || 0}`;
       }
       
       setMessage(successMsg);
 
       // Refetch loan data to get updated information
       const updatedLoanResponse = await http.get(`/customers/${loan.customer_id}/loans/${loan.id}`);
-      if (updatedLoanResponse?.loan) {
+      if (updatedLoanResponse?.data?.loan) {
+        setLoan(updatedLoanResponse.data.loan);
+      } else if (updatedLoanResponse?.loan) {
         setLoan(updatedLoanResponse.loan);
       } else {
         // Fallback: update with response loan data
-        setLoan(response.loan);
+        setLoan(responseData.loan);
       }
 
       // Add new payment record to history
-      if (response.paymentHistory) {
-        setPaymentHistory([response.paymentHistory, ...paymentHistory]);
+      if (responseData.paymentHistory) {
+        setPaymentHistory([responseData.paymentHistory, ...paymentHistory]);
       }
 
-      // Store receipt PDF if available
-      if (response.receiptPDF) {
-        setReceiptPDF(response.receiptPDF);
+      // Store receipt PDF if available and auto-download it.
+      if (responseData.receiptPDF) {
+        setReceiptPDF(responseData.receiptPDF);
+        handleDownloadReceipt(responseData.receiptPDF, responseData.loan || loan);
       }
 
       setPaymentAmount("");
