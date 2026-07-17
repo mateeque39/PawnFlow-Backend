@@ -329,6 +329,22 @@ function processPaymentWithAutoExtend(loan, paymentAmount, paymentDate) {
   const reachesInterest = totalInterestPaidAfter >= currentInterestAmount;
   console.log(`   Reaches interest amount ($${currentInterestAmount.toFixed(2)}): ${reachesInterest}`);
   
+  // If the payment completely pays off the loan, redeem it immediately.
+  if (paymentAmount >= currentRemaining) {
+    console.log(`   🎯 Full payoff detected - loan will be redeemed`);
+    return {
+      autoExtendTriggered: false,
+      newPrincipal: 0,
+      newInterestAmount: 0,
+      newDueDate: dueDate.toISOString().split('T')[0],
+      newInterestPaidThisCycle: 0,
+      newExtendedThisCycle: extendedThisCycle,
+      finalRemainingBalance: 0,
+      newStatus: 'redeemed',
+      message: 'Payment completed full payoff and redeemed the loan'
+    };
+  }
+  
   if (!reachesInterest) {
     console.log(`   ❌ Interest payment insufficient - no extension`);
     
@@ -350,32 +366,38 @@ function processPaymentWithAutoExtend(loan, paymentAmount, paymentDate) {
   // ===== AUTO-EXTEND TRIGGERED =====
   console.log(`\n✅ AUTO-EXTEND TRIGGERED!`);
   
+  // Calculate how much payment goes beyond the current interest obligation.
+  const interestOverpayment = Math.max(totalInterestPaidAfter - currentInterestAmount, 0);
+  const principalReduction = Math.min(principal, interestOverpayment);
+  const newPrincipal = Math.max(principal - principalReduction, 0);
+  const newStatus = status === 'overdue' ? 'active' : status;
+  
   // Extend due date by exactly 1 month
   const newDueDate = extendDateByOneMonth(dueDate);
   console.log(`   Due date extended: ${dueDate.toISOString().split('T')[0]} → ${newDueDate}`);
   
-  // Reset cycle tracking
-  const newInterestPaidThisCycle = 0; // Reset for next cycle
+  // Reset cycle tracking for the next interest cycle
+  const newInterestPaidThisCycle = 0;
   const newExtendedThisCycle = true;
   
-  // Remaining balance: principal + nextCycleInterest (computed as principal * rate / 100)
-  // The payment covered the interest, so we don't reduce the principal
-  const nextCycleInterest = (principal * interestRate) / 100;
-  const finalRemainingBalance = principal + nextCycleInterest;
+  // Next cycle interest is based on the reduced principal
+  const nextCycleInterest = Math.round((newPrincipal * interestRate / 100) * 100) / 100;
+  const finalRemainingBalance = newPrincipal + nextCycleInterest;
   
-  console.log(`   Principal (unchanged): $${principal.toFixed(2)}`);
+  console.log(`   Principal: $${principal.toFixed(2)} → $${newPrincipal.toFixed(2)}`);
+  console.log(`   Principal reduction from overpayment: $${principalReduction.toFixed(2)}`);
   console.log(`   Next cycle interest: $${nextCycleInterest.toFixed(2)}`);
   console.log(`   Final remaining balance: $${finalRemainingBalance.toFixed(2)}`);
   
   return {
     autoExtendTriggered: true,
-    newPrincipal: principal,
+    newPrincipal,
     newInterestAmount: nextCycleInterest,
     newDueDate: newDueDate,
     newInterestPaidThisCycle: newInterestPaidThisCycle,
     newExtendedThisCycle: newExtendedThisCycle,
     finalRemainingBalance: finalRemainingBalance,
-    newStatus: status, // Stays active
-    message: `✅ Auto-extended! Interest-only payment of $${paymentAmount.toFixed(2)} → Due date extended to ${newDueDate}`
+    newStatus,
+    message: `✅ Auto-extended! Interest covered and due date moved to ${newDueDate}`
   };
 }
