@@ -372,10 +372,13 @@ const ManageCustomerProfileForm = ({ loggedInUser }) => {
       const link = document.createElement('a');
       link.href = url;
       link.download = `loan_receipt_${loan.transaction_number || loan.transactionNumber || loan.id}.pdf`;
+      link.style.display = 'none';
       document.body.appendChild(link);
-      link.click();
-      window.URL.revokeObjectURL(url);
-      document.body.removeChild(link);
+      link.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+      setTimeout(() => {
+        window.URL.revokeObjectURL(url);
+        document.body.removeChild(link);
+      }, 1000);
 
       setMessage('Receipt downloaded successfully!');
       setMessageType('success');
@@ -618,6 +621,12 @@ const ManageCustomerProfileForm = ({ loggedInUser }) => {
       if (operationType === 'create' && result.pdf_url) {
         setTimeout(() => downloadLoanPDF(result.loan.id), 500);
       }
+
+      // Auto-download receipt when a payment is completed successfully
+      if (operationType === 'payment' && result?.receiptPDF) {
+        console.log('[ManageCustomerProfileForm] Payment response has receiptPDF, auto-downloading');
+        handleDownloadReceiptFromBase64(result.receiptPDF, selectedLoan || result.loan);
+      }
     } catch (error) {
       const parsedError = error.parsedError || parseError(error);
       const userMessage = error.userMessage || getErrorMessage(parsedError);
@@ -680,6 +689,36 @@ const ManageCustomerProfileForm = ({ loggedInUser }) => {
         return '#ffc107';
       default:
         return '#667eea';
+    }
+  };
+
+  const handleDownloadReceiptFromBase64 = (base64Pdf, loan) => {
+    if (!base64Pdf) return;
+
+    try {
+      const byteCharacters = atob(base64Pdf);
+      const byteNumbers = new Array(byteCharacters.length);
+      for (let i = 0; i < byteCharacters.length; i += 1) {
+        byteNumbers[i] = byteCharacters.charCodeAt(i);
+      }
+      const byteArray = new Uint8Array(byteNumbers);
+      const blob = new Blob([byteArray], { type: 'application/pdf' });
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `loan_receipt_${loan?.transaction_number || loan?.transactionNumber || loan?.id || 'payment'}.pdf`;
+      link.style.display = 'none';
+      document.body.appendChild(link);
+      link.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+      setTimeout(() => {
+        window.URL.revokeObjectURL(url);
+        document.body.removeChild(link);
+      }, 1000);
+      logger.info('Auto-downloaded receipt from base64 response', { loanId: loan?.id });
+    } catch (error) {
+      console.error('Error auto-downloading receipt from base64:', error);
+      setMessage('Error downloading receipt PDF');
+      setMessageType('error');
     }
   };
 
