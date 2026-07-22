@@ -43,13 +43,25 @@ cron.schedule('0 0 * * *', async () => {
       const totalPaid = paymentResult.rows[0].total_paid || 0;
 
       if (totalPaid >= loan.interest_amount) {
-        // Extend the due date by 30 days if interest is paid
+        // Extend the due date by 30 days and apply next-cycle interest
         const extendedDueDate = new Date(loan.due_date);
         extendedDueDate.setDate(extendedDueDate.getDate() + 30);  // Extend by 30 days
 
+        // Calculate next-cycle interest based on principal and interest rate
+        const principal = parseFloat(loan.loan_amount) || 0;
+        const rate = parseFloat(loan.interest_rate) || 0;
+        const nextInterest = parseFloat(((principal * rate) / 100).toFixed(2));
+
+        // New totals: interest_amount becomes the next-cycle interest
+        const newTotalPayable = parseFloat((principal + nextInterest).toFixed(2));
+
+        // Remaining balance should accrue the new interest (so paying interest to extend doesn't permanently reduce balance)
+        const currentRemaining = parseFloat(loan.remaining_balance) || 0;
+        const newRemaining = parseFloat((currentRemaining + nextInterest).toFixed(2));
+
         await pool.query(
-          'UPDATE loans SET due_date = $1 WHERE id = $2 RETURNING *',
-          [extendedDueDate.toISOString().slice(0, 10), loan.id]
+          `UPDATE loans SET due_date = $1, interest_amount = $2, total_payable_amount = $3, remaining_balance = $4 WHERE id = $5 RETURNING *`,
+          [extendedDueDate.toISOString().slice(0, 10), nextInterest, newTotalPayable, newRemaining, loan.id]
         );
       } else {
         // If interest is not paid, mark the loan as overdue
@@ -136,17 +148,28 @@ app.post('/extend-loan', async (req, res) => {
       const totalPaid = paymentResult.rows[0].total_paid || 0;
 
       if (totalPaid >= loan.interest_amount) {
-        // Extend the due date by 30 days and add new interest
+        // Extend the due date by 30 days and apply next-cycle interest
         dueDate.setDate(dueDate.getDate() + 30);
 
-        // Update the loan with the new due date
+        const principal = parseFloat(loan.loan_amount) || 0;
+        const rate = parseFloat(loan.interest_rate) || 0;
+        const nextInterest = parseFloat(((principal * rate) / 100).toFixed(2));
+        const newTotalPayable = parseFloat((principal + nextInterest).toFixed(2));
+        const currentRemaining = parseFloat(loan.remaining_balance) || 0;
+        const newRemaining = parseFloat((currentRemaining + nextInterest).toFixed(2));
+
+        // Update the loan with the new due date and interest/amounts
         const updateQuery = `
           UPDATE loans
-          SET due_date = $1
-          WHERE id = $2
+          SET due_date = $1,
+              interest_amount = $2,
+              total_payable_amount = $3,
+              remaining_balance = $4,
+              last_discounted_at = COALESCE(last_discounted_at, last_discounted_at)
+          WHERE id = $5
           RETURNING *;
         `;
-        const updatedLoan = await pool.query(updateQuery, [dueDate, loanId]);
+        const updatedLoan = await pool.query(updateQuery, [dueDate.toISOString().slice(0,10), nextInterest, newTotalPayable, newRemaining, loanId]);
 
         res.status(200).json({
           message: 'Loan extended by 30 days!',
@@ -2205,6 +2228,54 @@ app.post('/customers/:customerId/loans/:loanId/payment', async (req, res) => {
       'INSERT INTO payment_history (loan_id, payment_method, payment_amount, payment_date, created_by) VALUES ($1, $2, $3, CURRENT_TIMESTAMP, $4) RETURNING *',
       [loanIdNum, method, paymentAmount, userId || null]
     );
+
+    // Recompute total paid after this payment
+    const totalPaidRes = await pool.query(
+      'SELECT COALESCE(SUM(payment_amount),0) AS total_paid FROM payment_history WHERE loan_id = $1',
+      [loanIdNum]
+    );
+    const totalPaidNow = parseFloat(totalPaidRes.rows[0].total_paid || 0);
+
+    // If this payment covers at least the loan's interest_amount, treat it as an "interest payment" that triggers a 30-day extension
+    const interestAmt = parseFloat(ensureInterestAmount(loan)) || 0;
+    if (parseFloat(paymentAmount) >= interestAmt) {
+      try {
+        // Extend due date by 30 days from current due_date
+        const baseDue = loan.due_date ? new Date(loan.due_date) : new Date();
+        baseDue.setDate(baseDue.getDate() + 30);
+
+        // Recalculate interest based on principal (loan_amount)
+        const principal = parseFloat(loan.loan_amount) || 0;
+        const rate = parseFloat(loan.interest_rate) || 0;
+        const nextInterest = parseFloat(((principal * rate) / 100).toFixed(2));
+
+        // New totals: interest_amount becomes the next-cycle interest
+        const newTotalPayable = parseFloat((principal + nextInterest).toFixed(2));
+
+        // Per product behaviour: interest payments are treated as an extension fee and do not reduce the remaining principal here.
+        // Set remaining_balance to principal + new interest (reset), so interest-only payments extend the loan without lowering payable principal.
+        const newRemaining = newTotalPayable;
+
+        const updatedLoan = await pool.query(
+          `UPDATE loans SET remaining_balance = $1, due_date = $2, interest_amount = $3, total_payable_amount = $4 WHERE id = $5 RETURNING *`,
+          [newRemaining, baseDue.toISOString().slice(0,10), nextInterest, newTotalPayable, loanIdNum]
+        );
+
+        const loanWithInterest = {
+          ...updatedLoan.rows[0],
+          interest_amount: ensureInterestAmount(updatedLoan.rows[0])
+        };
+
+        return res.status(200).json({
+          message: 'Interest payment applied and loan extended by 30 days.',
+          loan: validators.formatLoanResponse(loanWithInterest),
+          paymentHistory: paymentResult.rows[0],
+        });
+      } catch (e) {
+        console.error('Error applying extension after interest payment:', e);
+        // fallthrough to return normal response below
+      }
+    }
 
     // Check if the loan was just fully paid (and auto-redeemed)
     if (finalBalance <= 0) {
