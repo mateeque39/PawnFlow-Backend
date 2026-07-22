@@ -1602,6 +1602,20 @@ app.post('/check-due-date', async (req, res) => {
   }
 });
 
+// Admin helper: mark loans overdue where due_date passed but status still 'active'
+app.post('/admin/mark-overdue', async (req, res) => {
+  try {
+    const update = await pool.query(
+      "UPDATE loans SET status = 'overdue', updated_at = CURRENT_TIMESTAMP WHERE due_date < CURRENT_DATE AND status IN ('active') AND COALESCE(remaining_balance, 0) > 0 RETURNING id"
+    );
+
+    res.status(200).json({ message: 'Marked loans overdue', count: update.rowCount, ids: update.rows.map(r => r.id) });
+  } catch (err) {
+    console.error('Error marking loans overdue:', err.message);
+    res.status(500).json({ message: 'Error marking loans overdue' });
+  }
+});
+
 // ---------------------------- PAYMENT HISTORY ----------------------------
 
 // ---------------------------- PAYMENT HISTORY ----------------------------
