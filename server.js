@@ -1516,35 +1516,82 @@ app.post('/add-money', async (req, res) => {
 
 app.post('/check-due-date', async (req, res) => {
   try {
+    // Consider both active and already-overdue loans for capitalization
     const result = await pool.query(
-      'SELECT * FROM loans WHERE due_date < CURRENT_DATE AND status = $1',
-      ['active']
+      "SELECT * FROM loans WHERE due_date < CURRENT_DATE AND status IN ('active','overdue')"
     );
 
     const loansDue = result.rows;
 
+    const today = new Date();
+
     for (let loan of loansDue) {
-      const paymentResult = await pool.query(
-        'SELECT SUM(payment_amount) AS total_paid FROM payment_history WHERE loan_id = $1',
-        [loan.id]
-      );
-      const totalPaid = paymentResult.rows[0].total_paid || 0;
+      try {
+        // Normalize loan values
+        const rate = parseFloat(loan.interest_rate || 0);
+        let principal = parseFloat(loan.loan_amount || 0);
+        let interestAmt = parseFloat(loan.interest_amount || 0);
 
-      if (totalPaid >= loan.interest_amount) {
-        // If interest is paid, extend due date by 30 days
-        const extendedDueDate = new Date(loan.due_date);
-        extendedDueDate.setDate(extendedDueDate.getDate() + 30);
+        // Calculate days/months overdue
+        const dueDate = loan.due_date instanceof Date ? loan.due_date : new Date(loan.due_date);
+        const daysOverdue = Math.floor((today.getTime() - dueDate.getTime()) / (1000 * 60 * 60 * 24));
+        const monthsOverdue = Math.max(0, Math.floor(daysOverdue / 30));
 
-        await pool.query(
-          'UPDATE loans SET due_date = $1 WHERE id = $2 RETURNING *',
-          [extendedDueDate.toISOString().slice(0, 10), loan.id]
+        // If at least one full 30-day cycle passed, capitalize interest for each full month
+        if (monthsOverdue >= 1) {
+          let newPrincipal = principal;
+          let newInterest = interestAmt;
+          let newDue = dueDate;
+
+          for (let i = 0; i < monthsOverdue; i++) {
+            // Add current interest to principal
+            newPrincipal = parseFloat((newPrincipal + newInterest).toFixed(2));
+            // Recalculate interest on new principal
+            newInterest = parseFloat(((newPrincipal * rate) / 100).toFixed(2));
+            // Advance due date by one month
+            newDue = new Date(extendDateByOneMonth(newDue));
+          }
+
+          const newRemaining = parseFloat((newPrincipal + newInterest).toFixed(2));
+          const newDueStr = newDue.toISOString().split('T')[0];
+
+          await pool.query(
+            `UPDATE loans SET loan_amount = $1, interest_amount = $2, remaining_balance = $3, due_date = $4, status = $5, updated_at = CURRENT_TIMESTAMP WHERE id = $6`,
+            [newPrincipal, newInterest, newRemaining, newDueStr, 'overdue', loan.id]
+          );
+
+          continue; // move to next loan
+        }
+
+        // Otherwise, check payments to see if interest covered to allow single extension
+        const paymentResult = await pool.query(
+          'SELECT SUM(payment_amount) AS total_paid FROM payment_history WHERE loan_id = $1',
+          [loan.id]
         );
-      } else {
-        // If interest is not paid, mark the loan as overdue
-        await pool.query(
-          'UPDATE loans SET status = $1 WHERE id = $2 RETURNING *',
-          ['overdue', loan.id]
-        );
+        const totalPaid = parseFloat(paymentResult.rows[0].total_paid || 0);
+
+        if (totalPaid >= interestAmt) {
+          // Extend due date by 30 days and recalc interest on new principal
+          const extendedDueDate = new Date(loan.due_date);
+          extendedDueDate.setDate(extendedDueDate.getDate() + 30);
+
+          const updatedPrincipal = principal; // principal unchanged
+          const updatedInterest = parseFloat(((updatedPrincipal * rate) / 100).toFixed(2));
+          const updatedRemaining = parseFloat((updatedPrincipal + updatedInterest).toFixed(2));
+
+          await pool.query(
+            `UPDATE loans SET due_date = $1, interest_amount = $2, remaining_balance = $3, status = $4, updated_at = CURRENT_TIMESTAMP WHERE id = $5`,
+            [extendedDueDate.toISOString().slice(0, 10), updatedInterest, updatedRemaining, 'active', loan.id]
+          );
+        } else {
+          // Mark as overdue if not enough payment
+          await pool.query(
+            `UPDATE loans SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`,
+            ['overdue', loan.id]
+          );
+        }
+      } catch (innerErr) {
+        console.error(`Error processing loan ${loan.id} in check-due-date:`, innerErr.message);
       }
     }
 
