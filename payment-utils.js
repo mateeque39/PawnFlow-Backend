@@ -352,9 +352,6 @@ function processPaymentWithAutoExtend(loan, paymentAmount, paymentDate) {
   }
   
   console.log(`\n✅ AUTO-EXTEND TRIGGERED!`);
-  const interestOverpayment = Math.max(totalInterestPaidAfter - currentInterestAmount, 0);
-  const principalReduction = Math.min(principal, interestOverpayment);
-  const newPrincipal = Math.max(principal - principalReduction, 0);
   const newStatus = status === 'overdue' ? 'active' : status;
   
   const newDueDate = extendDateByOneMonth(dueDate);
@@ -362,11 +359,17 @@ function processPaymentWithAutoExtend(loan, paymentAmount, paymentDate) {
   
   const newInterestPaidThisCycle = 0;
   const newExtendedThisCycle = true;
-  const nextCycleInterest = Math.round((newPrincipal * interestRate / 100) * 100) / 100;
+  const isOverdue = status === 'overdue';
+  const newPrincipal = isOverdue
+    ? Math.max(currentRemaining - paymentAmount, 0)
+    : Math.max(principal - Math.max(totalInterestPaidAfter - currentInterestAmount, 0), 0);
+  const nextCycleInterest = isOverdue
+    ? currentInterestAmount
+    : Math.round((newPrincipal * interestRate / 100) * 100) / 100;
   const finalRemainingBalance = newPrincipal + nextCycleInterest;
   
   console.log(`   Principal: $${principal.toFixed(2)} → $${newPrincipal.toFixed(2)}`);
-  console.log(`   Principal reduction from overpayment: $${principalReduction.toFixed(2)}`);
+  console.log(`   Payment applied before next-cycle interest: $${paymentAmount.toFixed(2)}`);
   console.log(`   Next cycle interest: $${nextCycleInterest.toFixed(2)}`);
   console.log(`   Final remaining balance: $${finalRemainingBalance.toFixed(2)}`);
   

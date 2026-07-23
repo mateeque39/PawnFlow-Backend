@@ -1535,7 +1535,10 @@ app.post('/add-money', async (req, res) => {
 async function runCheckDueDate() {
   // Consider both active and already-overdue loans for capitalization
   const result = await pool.query(
-    "SELECT * FROM loans WHERE due_date < CURRENT_DATE AND status IN ('active','overdue')"
+    `SELECT * FROM loans
+     WHERE due_date < CURRENT_DATE
+       AND status IN ('active', 'overdue')
+       AND (status = 'active' OR last_extended_at IS NULL OR last_extended_at <= CURRENT_TIMESTAMP - INTERVAL '30 days')`
   );
 
   const loansDue = result.rows;
@@ -1558,23 +1561,19 @@ async function runCheckDueDate() {
       if (monthsOverdue >= 1) {
         let newPrincipal = principal;
         let newInterest = interestAmt;
-        let newDue = dueDate;
 
         for (let i = 0; i < monthsOverdue; i++) {
           // Add current interest to principal
           newPrincipal = parseFloat((newPrincipal + newInterest).toFixed(2));
           // Recalculate interest on new principal
           newInterest = parseFloat(((newPrincipal * rate) / 100).toFixed(2));
-          // Advance due date by one month
-          newDue = new Date(extendDateByOneMonth(newDue));
         }
 
         const newRemaining = parseFloat((newPrincipal + newInterest).toFixed(2));
-        const newDueStr = newDue.toISOString().split('T')[0];
 
         await pool.query(
-          `UPDATE loans SET loan_amount = $1, interest_amount = $2, remaining_balance = $3, due_date = $4, status = $5, updated_at = CURRENT_TIMESTAMP WHERE id = $6`,
-          [newPrincipal, newInterest, newRemaining, newDueStr, 'overdue', loan.id]
+          `UPDATE loans SET loan_amount = $1, interest_amount = $2, remaining_balance = $3, due_date = $4, status = $5, last_extended_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = $6`,
+          [newPrincipal, newInterest, newRemaining, loan.due_date, 'overdue', loan.id]
         );
 
         continue; // move to next loan
@@ -1597,13 +1596,13 @@ async function runCheckDueDate() {
         const updatedRemaining = parseFloat((updatedPrincipal + updatedInterest).toFixed(2));
 
         await pool.query(
-          `UPDATE loans SET due_date = $1, interest_amount = $2, remaining_balance = $3, status = $4, updated_at = CURRENT_TIMESTAMP WHERE id = $5`,
+          `UPDATE loans SET due_date = $1, interest_amount = $2, remaining_balance = $3, status = $4, last_extended_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = $5`,
           [extendedDueDate.toISOString().slice(0, 10), updatedInterest, updatedRemaining, 'active', loan.id]
         );
       } else {
         // Mark as overdue if not enough payment
         await pool.query(
-          `UPDATE loans SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`,
+          `UPDATE loans SET status = $1, last_extended_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = $2`,
           ['overdue', loan.id]
         );
       }
