@@ -305,16 +305,6 @@ async function calculateExpectedDueDate(pool, loan) {
     : 30;
 
   const initialDueDate = addDays(issueDate, termDays);
-  let workingDueDate = initialDueDate;
-  let cumulativePaidThisCycle = 0;
-
-  const currentCycleInterest = parseFloat(loan.interest_amount || 0);
-  const principal = parseFloat(loan.loan_amount || 0);
-  const interestRate = parseFloat(loan.interest_rate || 0);
-  const fallbackInterest = principal > 0 && interestRate > 0
-    ? Math.round((principal * interestRate / 100) * 100) / 100
-    : 0;
-  const threshold = currentCycleInterest > 0 ? currentCycleInterest : fallbackInterest;
 
   const paymentHistoryResult = await pool.query(
     `SELECT payment_amount, payment_date FROM payment_history WHERE loan_id = $1 ORDER BY payment_date ASC`,
@@ -333,30 +323,15 @@ async function calculateExpectedDueDate(pool, loan) {
     ...paymentHistoryResult.rows,
     ...paymentsResult.rows,
     ...loanPaymentsResult.rows
-  ].sort((a, b) => {
-    const dateA = parseDate(a.payment_date);
-    const dateB = parseDate(b.payment_date);
-    if (!dateA || !dateB) return 0;
-    return dateA.getTime() - dateB.getTime();
-  });
+  ];
 
-  for (const payment of payments) {
-    const paymentDate = parseDate(payment.payment_date);
+  const qualifyingPaymentCount = payments.reduce((count, payment) => {
     const paymentAmount = parseFloat(payment.payment_amount || 0);
+    return paymentAmount > 0 ? count + 1 : count;
+  }, 0);
 
-    if (!paymentDate || paymentAmount <= 0) continue;
-
-    if (paymentDate <= normalizeDateOnly(workingDueDate)) {
-      cumulativePaidThisCycle += paymentAmount;
-
-      if (threshold > 0 && cumulativePaidThisCycle >= threshold) {
-        workingDueDate = addMonths(workingDueDate, 1);
-        cumulativePaidThisCycle = 0;
-      }
-    }
-  }
-
-  return formatDate(workingDueDate);
+  const expectedDueDate = addMonths(initialDueDate, qualifyingPaymentCount);
+  return formatDate(expectedDueDate);
 }
 
 /**
@@ -431,9 +406,9 @@ async function retroactiveExtendLoans(pool) {
         const countFromLoanPayments = parseInt(loanPaymentsResult.rows[0]?.payment_count_lp || 0);
         const totalPaid = totalFromHistory + totalFromPayments + totalFromLoanPayments;
         const hasPayments = countFromHistory > 0 || countFromPayments > 0 || countFromLoanPayments > 0;
+        const paymentCount = countFromHistory + countFromPayments + countFromLoanPayments;
         const requiredInterest = parseFloat(loan.interest_amount || 0);
-        const qualifies = hasPayments && totalPaid >= requiredInterest;
-        const shouldMarkExtended = qualifies || loan.extended_this_cycle === true;
+        const shouldMarkExtended = hasPayments || loan.extended_this_cycle === true;
 
         const currentDueDate = loan.due_date ? formatDate(loan.due_date) : null;
         const shouldUpdate = currentDueDate === null || currentDueDate !== expectedDueDate;
