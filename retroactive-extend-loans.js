@@ -61,43 +61,35 @@ async function checkLoanQualifiesForExtension(client, loan) {
     return null;
   }
 
-  // Check if any payment was interest-only and before/on original due date
-  let totalInterestPaid = 0;
-  let hasQualifyingPayment = false;
-  const originalDueDate = loan.cycle_start_date 
-    ? new Date(loan.cycle_start_date) 
-    : new Date(loan.created_at);
-  
+  // Count each payment made against the loan as a monthly extension trigger.
+  // This avoids under-extending loans that have several payments but were not
+  // recognized by the earlier threshold-based logic.
+  let qualifyingPaymentCount = 0;
+  let totalPaid = 0;
+
   for (const payment of payments) {
     const paymentDate = new Date(payment.payment_date);
-    
-    // Check if payment was before or on original due date
-    if (paymentDate <= new Date(loan.due_date)) {
-      totalInterestPaid += parseFloat(payment.payment_amount);
-      hasQualifyingPayment = true;
-      console.log(`      ✓ Payment: $${payment.payment_amount} on ${paymentDate.toISOString().split('T')[0]}`);
-    }
+    const paymentAmount = parseFloat(payment.payment_amount || 0);
+
+    if (paymentAmount <= 0) continue;
+
+    totalPaid += paymentAmount;
+    qualifyingPaymentCount += 1;
+    console.log(`      ✓ Payment: $${payment.payment_amount} on ${paymentDate.toISOString().split('T')[0]}`);
   }
 
-  if (!hasQualifyingPayment) {
+  if (qualifyingPaymentCount === 0) {
     console.log(`   ⏭️  Loan ${loanId}: No qualifying payments found`);
     return null;
   }
 
-  // Check if total paid >= remaining interest
-  const requiredInterest = parseFloat(loan.interest_amount);
-  if (totalInterestPaid >= requiredInterest) {
-    console.log(`   ✅ Loan ${loanId} QUALIFIES: Paid $${totalInterestPaid.toFixed(2)} interest (required: $${requiredInterest.toFixed(2)})`);
-    return {
-      loanId,
-      totalInterestPaid,
-      requiredInterest,
-      newDueDate: addMonths(new Date(loan.due_date), 1)
-    };
-  }
-
-  console.log(`   ⏭️  Loan ${loanId}: Only paid $${totalInterestPaid.toFixed(2)}, needs $${requiredInterest.toFixed(2)}`);
-  return null;
+  console.log(`   ✅ Loan ${loanId} QUALIFIES: ${qualifyingPaymentCount} payment(s) recorded, total paid $${totalPaid.toFixed(2)}`);
+  return {
+    loanId,
+    totalPaid,
+    qualifyingPaymentCount,
+    newDueDate: addMonths(new Date(loan.due_date), qualifyingPaymentCount)
+  };
 }
 
 /**

@@ -95,21 +95,11 @@ function calculateExpectedDueDate(loan, issuedDate) {
     ? parseInt(loan.loan_term, 10)
     : 30;
 
-  const currentCycleInterest = parseFloat(loan.interest_amount || 0);
-  const principal = parseFloat(loan.loan_amount || 0);
-  const interestRate = parseFloat(loan.interest_rate || 0);
-  const fallbackInterest = principal > 0 && interestRate > 0
-    ? Math.round((principal * interestRate / 100) * 100) / 100
-    : 0;
-
   const initialDueDate = addDays(issuedDate, termDays);
   let workingDueDate = initialDueDate;
-  let cumulativePaidThisCycle = 0;
-  const threshold = currentCycleInterest > 0 ? currentCycleInterest : fallbackInterest;
 
   return ({ payments }) => {
     workingDueDate = initialDueDate;
-    cumulativePaidThisCycle = 0;
 
     for (const payment of payments) {
       const paymentDate = parseDate(payment.payment_date);
@@ -117,14 +107,10 @@ function calculateExpectedDueDate(loan, issuedDate) {
 
       if (!paymentDate || paymentAmount <= 0) continue;
 
-      if (paymentDate <= normalizeDateOnly(workingDueDate)) {
-        cumulativePaidThisCycle += paymentAmount;
-
-        if (threshold > 0 && cumulativePaidThisCycle >= threshold) {
-          workingDueDate = addMonths(workingDueDate, 1);
-          cumulativePaidThisCycle = 0;
-        }
-      }
+      // Business rule for this workflow: each payment made against the loan should
+      // push the due date forward by one month. This matches the customer's expectation
+      // that multiple payments result in multiple monthly extensions.
+      workingDueDate = addMonths(workingDueDate, 1);
     }
 
     return formatDate(workingDueDate);
@@ -200,4 +186,4 @@ if (require.main === module) {
     });
 }
 
-module.exports = { runMigration };
+module.exports = { runMigration, calculateExpectedDueDate };
