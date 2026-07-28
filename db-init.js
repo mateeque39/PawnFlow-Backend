@@ -264,6 +264,101 @@ COMMENT ON COLUMN loans.state IS 'Customer state/province';
 COMMENT ON COLUMN loans.zipcode IS 'Customer postal/zip code';
 `;
 
+function addDays(date, days) {
+  const result = new Date(date);
+  result.setDate(result.getDate() + days);
+  return result;
+}
+
+function addMonths(date, months) {
+  const result = new Date(date);
+  result.setMonth(result.getMonth() + months);
+  return result;
+}
+
+function parseDate(value) {
+  if (!value) return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function formatDate(date) {
+  const d = new Date(date);
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function normalizeDateOnly(value) {
+  const date = new Date(value);
+  date.setHours(0, 0, 0, 0);
+  return date;
+}
+
+async function calculateExpectedDueDate(pool, loan) {
+  const issueDate = parseDate(loan.loan_issued_date || loan.created_at || loan.issued_date);
+  if (!issueDate) return null;
+
+  const termDays = Number.isInteger(parseInt(loan.loan_term, 10))
+    ? parseInt(loan.loan_term, 10)
+    : 30;
+
+  const initialDueDate = addDays(issueDate, termDays);
+  let workingDueDate = initialDueDate;
+  let cumulativePaidThisCycle = 0;
+
+  const currentCycleInterest = parseFloat(loan.interest_amount || 0);
+  const principal = parseFloat(loan.loan_amount || 0);
+  const interestRate = parseFloat(loan.interest_rate || 0);
+  const fallbackInterest = principal > 0 && interestRate > 0
+    ? Math.round((principal * interestRate / 100) * 100) / 100
+    : 0;
+  const threshold = currentCycleInterest > 0 ? currentCycleInterest : fallbackInterest;
+
+  const paymentHistoryResult = await pool.query(
+    `SELECT payment_amount, payment_date FROM payment_history WHERE loan_id = $1 ORDER BY payment_date ASC`,
+    [loan.id]
+  );
+  const paymentsResult = await pool.query(
+    `SELECT payment_amount, payment_date FROM payments WHERE loan_id = $1 ORDER BY payment_date ASC`,
+    [loan.id]
+  );
+  const loanPaymentsResult = await pool.query(
+    `SELECT amount_paid AS payment_amount, payment_date FROM loan_payments WHERE loan_id = $1 ORDER BY payment_date ASC`,
+    [loan.id]
+  );
+
+  const payments = [
+    ...paymentHistoryResult.rows,
+    ...paymentsResult.rows,
+    ...loanPaymentsResult.rows
+  ].sort((a, b) => {
+    const dateA = parseDate(a.payment_date);
+    const dateB = parseDate(b.payment_date);
+    if (!dateA || !dateB) return 0;
+    return dateA.getTime() - dateB.getTime();
+  });
+
+  for (const payment of payments) {
+    const paymentDate = parseDate(payment.payment_date);
+    const paymentAmount = parseFloat(payment.payment_amount || 0);
+
+    if (!paymentDate || paymentAmount <= 0) continue;
+
+    if (paymentDate <= normalizeDateOnly(workingDueDate)) {
+      cumulativePaidThisCycle += paymentAmount;
+
+      if (threshold > 0 && cumulativePaidThisCycle >= threshold) {
+        workingDueDate = addMonths(workingDueDate, 1);
+        cumulativePaidThisCycle = 0;
+      }
+    }
+  }
+
+  return formatDate(workingDueDate);
+}
+
 /**
  * Retroactively extend loans that have paid interest-only payments
  * This function identifies qualifying loans and extends their due dates automatically
@@ -277,14 +372,11 @@ async function retroactiveExtendLoans(pool) {
   try {
     console.log('\n🔄 Checking for loans to retroactively extend...');
 
-    // Reset the extended_this_cycle flag ONLY for loans that haven't been extended yet
-    // This prevents re-extending already-extended loans on startup
     console.log('   🔄 Resetting extension flags for loans not yet extended...');
     await pool.query(
       `UPDATE loans SET extended_this_cycle = false WHERE status IN ('active', 'overdue') AND extended_this_cycle != true`
     );
 
-    // Get all active AND overdue loans for checking
     const loansResult = await pool.query(
       `SELECT * FROM loans 
        WHERE status IN ('active', 'overdue')
@@ -302,26 +394,28 @@ async function retroactiveExtendLoans(pool) {
     loans.forEach(l => console.log(`   - Loan #${l.id}: Principal $${l.loan_amount}, Interest $${l.interest_amount}, Status: ${l.status}, Extended: ${l.extended_this_cycle}`));
     console.log('');
 
-    // Check each loan for extension eligibility
     for (const loan of loans) {
       try {
         console.log(`  📍 Checking Loan #${loan.id}: Principal $${loan.loan_amount}, Interest $${loan.interest_amount}`);
-        
-        // Check ALL THREE payment tables using pool
+
+        const expectedDueDate = await calculateExpectedDueDate(pool, loan);
+        if (!expectedDueDate) {
+          console.log('      ⏭️  Skipped: missing issued date');
+          continue;
+        }
+
         const paymentHistoryResult = await pool.query(
           `SELECT SUM(CAST(payment_amount AS NUMERIC)) as total_paid_ph, COUNT(*) as payment_count_ph
            FROM payment_history 
            WHERE loan_id = $1`,
           [loan.id]
         );
-        
         const paymentsResult = await pool.query(
           `SELECT SUM(CAST(payment_amount AS NUMERIC)) as total_paid_p, COUNT(*) as payment_count_p
            FROM payments 
            WHERE loan_id = $1`,
           [loan.id]
         );
-        
         const loanPaymentsResult = await pool.query(
           `SELECT SUM(CAST(amount_paid AS NUMERIC)) as total_paid_lp, COUNT(*) as payment_count_lp
            FROM loan_payments 
@@ -331,136 +425,49 @@ async function retroactiveExtendLoans(pool) {
 
         const totalFromHistory = parseFloat(paymentHistoryResult.rows[0]?.total_paid_ph || 0);
         const countFromHistory = parseInt(paymentHistoryResult.rows[0]?.payment_count_ph || 0);
-        
         const totalFromPayments = parseFloat(paymentsResult.rows[0]?.total_paid_p || 0);
         const countFromPayments = parseInt(paymentsResult.rows[0]?.payment_count_p || 0);
-        
         const totalFromLoanPayments = parseFloat(loanPaymentsResult.rows[0]?.total_paid_lp || 0);
         const countFromLoanPayments = parseInt(loanPaymentsResult.rows[0]?.payment_count_lp || 0);
-        
         const totalPaid = totalFromHistory + totalFromPayments + totalFromLoanPayments;
         const hasPayments = countFromHistory > 0 || countFromPayments > 0 || countFromLoanPayments > 0;
         const requiredInterest = parseFloat(loan.interest_amount || 0);
         const qualifies = hasPayments && totalPaid >= requiredInterest;
-        
+        const shouldMarkExtended = qualifies || loan.extended_this_cycle === true;
+
+        const currentDueDate = loan.due_date ? formatDate(loan.due_date) : null;
+        const shouldUpdate = currentDueDate === null || currentDueDate < expectedDueDate;
+
         console.log(`      payment_history: ${countFromHistory} records, $${totalFromHistory.toFixed(2)}`);
         console.log(`      payments table: ${countFromPayments} records, $${totalFromPayments.toFixed(2)}`);
-        console.log(`      loan_payments: ${countFromLoanPayments} records, $${totalFromLoanPayments.toFixed(2)}`);
+        console.log(`      loan_payments: ${countFromLoanPayments} records, $${countFromLoanPayments.toFixed(2)}`);
         console.log(`      Total Paid: $${totalPaid.toFixed(2)}, Required Interest: $${requiredInterest.toFixed(2)}`);
-        console.log(`      QUALIFIES: ${qualifies ? '✅ YES' : '❌ NO (hasPayments=' + hasPayments + ', paid>= required=' + (totalPaid >= requiredInterest) + ')'}`);
-        
-        // Get sample records for debugging - ONLY IF DOESN'T QUALIFY (to debug why)
-        if (!qualifies && countFromHistory > 0) {
-          const samplePH = await pool.query(
-            `SELECT payment_amount, payment_date FROM payment_history WHERE loan_id = $1 LIMIT 1`,
-            [loan.id]
-          );
-          samplePH.rows.forEach(p => {
-            console.log(`        [history sample] - $${p.payment_amount} on ${p.payment_date}`);
-          });
-        }
-        
-        if (!qualifies && countFromPayments > 0) {
-          const sampleP = await pool.query(
-            `SELECT payment_amount, payment_date FROM payments WHERE loan_id = $1 LIMIT 1`,
-            [loan.id]
-          );
-          sampleP.rows.forEach(p => {
-            console.log(`        [payments sample] - $${p.payment_amount} on ${p.payment_date}`);
-          });
-        }
-        
-        if (!qualifies && countFromLoanPayments > 0) {
-          const sampleLP = await pool.query(
-            `SELECT amount_paid, payment_date FROM loan_payments WHERE loan_id = $1 LIMIT 1`,
-            [loan.id]
-          );
-          sampleLP.rows.forEach(p => {
-            console.log(`        [loan_payments sample] - $${p.amount_paid} on ${p.payment_date}`);
-          });
-        }
-        
-        if (qualifies) {
-          console.log(`      ✅ EXTENSION QUALIFIED`);
-          
-          // BUT: Skip re-extending loans that are already extended this cycle
-          // These should persist from the database and NOT be recalculated
-          if (loan.extended_this_cycle) {
-            console.log(`      ⏭️  SKIPPED: Already extended this cycle - preserving existing extension`);
-          } else {
-            
-          // Calculate new due date EXACTLY like migrate-on-startup.js does (proven to work)
-          const dueDate = new Date(loan.due_date);
-          console.log(`      [PRE-SETMONTH] dueDate=${dueDate.toISOString()}, getMonth()=${dueDate.getMonth()}`);
-          
-          dueDate.setMonth(dueDate.getMonth() + 1);
-          console.log(`      [POST-SETMONTH] dueDate=${dueDate.toISOString()}, getMonth()=${dueDate.getMonth()}`);
-          
-          const year = dueDate.getFullYear();
-          const month = String(dueDate.getMonth() + 1).padStart(2, '0');
-          const day = String(dueDate.getDate()).padStart(2, '0');
-          const newDueDate = `${year}-${month}-${day}`;
+        console.log(`      Reconstructed due date: ${expectedDueDate}`);
 
-          console.log(`      [DEBUG] Calculated newDueDate="${newDueDate}" (String type) from loan.due_date="${loan.due_date}"`);
-          console.log(`      [DEBUG] Parameter value type: ${typeof newDueDate}, value: "${newDueDate}"`);
-          console.log(`      [DEBUG BEFORE UPDATE] About to execute UPDATE with params: newDate="${newDueDate}", loanId=${loan.id}`);
-          // STEP 1: Simple pool.query without transaction (proven to work)
-          try {
-            // Execute update using TO_DATE (proven to work in test endpoint)
-            const updateResult = await pool.query(
-              `UPDATE loans SET due_date = TO_DATE($1, 'YYYY-MM-DD'), updated_at = CURRENT_TIMESTAMP WHERE id = $2 RETURNING id, due_date`,
-              [newDueDate, loan.id]
-            );
+        if (!shouldUpdate) {
+          console.log(`      ✅ Due date already aligned: ${currentDueDate} >= ${expectedDueDate}`);
+          continue;
+        }
 
-            console.log(`      [UPDATE DUE_DATE] Query returned ${updateResult.rows.length} rows`);
-            
-            if (updateResult.rows.length > 0) {
-              extendedCount++;
-              const updatedLoan = updateResult.rows[0];
-              
-              // Log what the RETURNING clause gave us
-              console.log(`      [RETURNING] due_date="${updatedLoan.due_date}" (type: ${typeof updatedLoan.due_date})`);
-              console.log(`      [IMMEDIATELY AFTER UPDATE] extendedCount incremented to ${extendedCount}`);
-              
-              // STEP 2: Update extended_this_cycle flag within same transaction
-              // STEP 2: Update extended_this_cycle flag (simple pool.query)
-              const flagResult = await pool.query(
-                `UPDATE loans SET extended_this_cycle = true WHERE id = $1 RETURNING id, extended_this_cycle`,
-                [loan.id]
-              );
-              console.log(`      [UPDATE FLAG] Query returned ${flagResult.rows.length} rows`);
-              
-              // STEP 3: Wait briefly to allow database flush
-              await new Promise(resolve => setTimeout(resolve, 100));
-              
-              // STEP 4: Verify from fresh connection
-              const verifyResult = await pool.query(
-                'SELECT id, due_date, extended_this_cycle, updated_at FROM loans WHERE id = $1',
-                [loan.id]
-              );
-              
-              if (verifyResult.rows.length > 0) {
-                const verified = verifyResult.rows[0];
-                const dbDueDate = verified.due_date.toISOString().split('T')[0];
-                const datesMatch = dbDueDate === newDueDate;
-                
-                console.log(`  ✅ Loan #${loan.id}: Extended due_date to ${newDueDate}`);
-                console.log(`      ✓ Verified in DB: due_date=${dbDueDate}, extended=${verified.extended_this_cycle}`);
-                console.log(`      ✓ Match: ${datesMatch ? '✅ YES' : '❌ NO'}`);
-                if (!datesMatch) {
-                  console.error(`      🚨 FAILED: Expected ${newDueDate} but got ${dbDueDate}`);
-                }
-                console.log(`      (Paid: $${totalPaid.toFixed(2)} interest, Required: $${requiredInterest.toFixed(2)})`);
-              }
-            } else {
-              console.log(`  ❌ Loan #${loan.id}: UPDATE returned 0 rows`);
-            }
-          } catch (updateErr) {
-            console.error(`  ❌ Loan #${loan.id}: UPDATE FAILED - ${updateErr.message}`);
+        try {
+          const updateResult = await pool.query(
+            `UPDATE loans
+             SET due_date = TO_DATE($1, 'YYYY-MM-DD'),
+                 extended_this_cycle = $2,
+                 updated_at = CURRENT_TIMESTAMP
+             WHERE id = $3
+             RETURNING id, due_date, extended_this_cycle`,
+            [expectedDueDate, shouldMarkExtended, loan.id]
+          );
+
+          if (updateResult.rows.length > 0) {
+            extendedCount++;
+            const updatedLoan = updateResult.rows[0];
+            console.log(`  ✅ Loan #${loan.id}: updated due_date to ${expectedDueDate}`);
+            console.log(`      ✓ Verified in DB: due_date=${formatDate(updatedLoan.due_date)}, extended=${updatedLoan.extended_this_cycle}`);
           }
-          }
-        } else {
-          console.log(`      ⏭️  Skipped: hasPayments=${hasPayments}, totalPaid >= required=${totalPaid >= requiredInterest}`);
+        } catch (updateErr) {
+          console.error(`  ❌ Loan #${loan.id}: UPDATE FAILED - ${updateErr.message}`);
         }
       } catch (loanErr) {
         console.error(`  ❌ Error processing Loan #${loan.id}:`, loanErr.message);
@@ -468,7 +475,7 @@ async function retroactiveExtendLoans(pool) {
     }
 
     if (extendedCount > 0) {
-      console.log(`\n✅ Retroactively extended ${extendedCount} loans`);
+      console.log(`\n✅ Repaired due dates for ${extendedCount} loans`);
     }
 
     console.log('✅ Retroactive extension complete');
