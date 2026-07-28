@@ -53,6 +53,19 @@ function normalizeDateOnly(value) {
   return date;
 }
 
+function shouldUpdateDueDate(currentDueDate, expectedDueDate) {
+  if (!currentDueDate) return true;
+
+  const current = normalizeDateOnly(currentDueDate);
+  const expected = normalizeDateOnly(expectedDueDate);
+
+  if (Number.isNaN(current.getTime()) || Number.isNaN(expected.getTime())) {
+    return true;
+  }
+
+  return current.getTime() < expected.getTime();
+}
+
 async function fetchLoanPayments(loanId) {
   const paymentHistoryResult = await pool.query(
     `SELECT payment_amount, payment_date
@@ -147,7 +160,7 @@ async function runMigration() {
     const expectedDueDate = calculateExpectedDueDate(loan, issuedDate)({ payments });
     const currentDueDate = loan.due_date ? formatDate(loan.due_date) : null;
 
-    const shouldUpdate = currentDueDate === null || currentDueDate !== expectedDueDate;
+    const shouldUpdate = shouldUpdateDueDate(currentDueDate, expectedDueDate);
 
     if (!shouldUpdate) {
       skippedCount += 1;
@@ -186,4 +199,4 @@ if (require.main === module) {
     });
 }
 
-module.exports = { runMigration, calculateExpectedDueDate };
+module.exports = { runMigration, calculateExpectedDueDate, shouldUpdateDueDate };
