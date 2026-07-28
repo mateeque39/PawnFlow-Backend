@@ -73,8 +73,8 @@ console.log('TEST 2: Multiple partial payments sum to interest amount triggers e
   console.log('');
 }
 
-// ===== TEST 3: Payment after dueDate does NOT trigger extension =====
-console.log('TEST 3: Payment after due date does NOT trigger extension');
+// ===== TEST 3: Payment after due date should still trigger extension if interest covered
+console.log('TEST 3: Payment after due date should still trigger extension if interest covered');
 {
   const loan = createTestLoan();
   const paymentDate = new Date('2024-03-20'); // After due date (2024-03-15)
@@ -82,9 +82,9 @@ console.log('TEST 3: Payment after due date does NOT trigger extension');
 
   const result = processPaymentWithAutoExtend(loan, paymentAmount, paymentDate);
 
-  assert(result.autoExtendTriggered === false, 'Auto-extend NOT triggered');
-  assert(result.newDueDate === '2024-03-15', 'Due date unchanged');
-  assert(result.finalRemainingBalance === 20000, 'Remaining balance reduced by payment');
+  assert(result.autoExtendTriggered === true, 'Auto-extend triggered after due date when interest covered');
+  assert(result.newDueDate === '2024-04-15', 'Due date extended by 1 month');
+  assert(result.finalRemainingBalance === 20600, 'Remaining balance updated to principal + next cycle interest');
   console.log('');
 }
 

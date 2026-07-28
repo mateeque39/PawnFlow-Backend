@@ -312,6 +312,7 @@ function processPaymentWithAutoExtend(loan, paymentAmount, paymentDate) {
   const paymentDateOnly = parseDateOnly(paymentDate);
   const dueDateOnly = parseDateOnly(dueDate);
   const formattedDueDate = formatDateOnly(dueDate);
+  const dueDateObj = new Date(dueDate);
   
   console.log(`\n💳 AUTO-EXTEND PAYMENT PROCESSING - Loan ${loanId}`);
   console.log(`   Payment Date: ${paymentDateOnly ? `${paymentDateOnly.year}-${String(paymentDateOnly.month).padStart(2, '0')}-${String(paymentDateOnly.day).padStart(2, '0')}` : 'invalid'}`);
@@ -330,22 +331,6 @@ function processPaymentWithAutoExtend(loan, paymentAmount, paymentDate) {
   const reachesInterest = totalInterestPaidAfter >= currentInterestAmount;
   console.log(`   Reaches interest amount ($${currentInterestAmount.toFixed(2)}): ${reachesInterest}`);
   
-  if (!isBeforeOrOnDueDate) {
-    console.log(`   ⏭️  PAYMENT AFTER DUE DATE - No auto-extension applies`);
-    const newRemaining = Math.max(currentRemaining - paymentAmount, 0);
-    return {
-      autoExtendTriggered: false,
-      newPrincipal: principal,
-      newInterestAmount: currentInterestAmount,
-      newDueDate: formattedDueDate,
-      newInterestPaidThisCycle: totalInterestPaidAfter,
-      newExtendedThisCycle: extendedThisCycle,
-      finalRemainingBalance: newRemaining,
-      newStatus: newRemaining === 0 ? 'redeemed' : status,
-      message: 'Payment applied after due date, no extension'
-    };
-  }
-  
   if (extendedThisCycle) {
     console.log(`   ⏭️  ALREADY EXTENDED THIS CYCLE - No double extension`);
     const newRemaining = Math.max(currentRemaining - paymentAmount, 0);
@@ -353,7 +338,7 @@ function processPaymentWithAutoExtend(loan, paymentAmount, paymentDate) {
       autoExtendTriggered: false,
       newPrincipal: principal,
       newInterestAmount: currentInterestAmount,
-      newDueDate: dueDate.toISOString().split('T')[0],
+      newDueDate: formattedDueDate,
       newInterestPaidThisCycle: totalInterestPaidAfter,
       newExtendedThisCycle: true,
       finalRemainingBalance: newRemaining,
@@ -368,7 +353,7 @@ function processPaymentWithAutoExtend(loan, paymentAmount, paymentDate) {
       autoExtendTriggered: false,
       newPrincipal: 0,
       newInterestAmount: 0,
-      newDueDate: dueDate.toISOString().split('T')[0],
+      newDueDate: formattedDueDate,
       newInterestPaidThisCycle: 0,
       newExtendedThisCycle: extendedThisCycle,
       finalRemainingBalance: 0,
@@ -384,7 +369,7 @@ function processPaymentWithAutoExtend(loan, paymentAmount, paymentDate) {
       autoExtendTriggered: false,
       newPrincipal: principal,
       newInterestAmount: currentInterestAmount,
-      newDueDate: dueDate.toISOString().split('T')[0],
+      newDueDate: formattedDueDate,
       newInterestPaidThisCycle: totalInterestPaidAfter,
       newExtendedThisCycle: false,
       finalRemainingBalance: newRemaining,
@@ -397,7 +382,7 @@ function processPaymentWithAutoExtend(loan, paymentAmount, paymentDate) {
   const newStatus = status === 'overdue' ? 'active' : status;
   
   const newDueDate = extendDateByOneMonth(dueDate);
-  console.log(`   Due date extended: ${dueDate.toISOString().split('T')[0]} → ${newDueDate}`);
+  console.log(`   Due date extended: ${formattedDueDate} → ${newDueDate}`);
   
   const newInterestPaidThisCycle = 0;
   const newExtendedThisCycle = true;
