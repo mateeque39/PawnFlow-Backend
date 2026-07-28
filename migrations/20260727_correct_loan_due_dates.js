@@ -161,13 +161,15 @@ async function runMigration() {
     const expectedDueDate = calculateExpectedDueDate(loan, issuedDate)({ payments });
     const currentDueDate = loan.due_date ? formatDate(loan.due_date) : null;
 
-    const shouldUpdate = currentDueDate === null || currentDueDate < expectedDueDate;
+    const shouldUpdate = currentDueDate === null || currentDueDate !== expectedDueDate;
 
     if (!shouldUpdate) {
       skippedCount += 1;
-      console.log(`   ✅ Loan ${loan.id}: due_date is already correct or later than expected (${currentDueDate || 'null'})`);
+      console.log(`   ✅ Loan ${loan.id}: due_date is already correct (${currentDueDate || 'null'})`);
       continue;
     }
+
+    console.log(`   🔄 Loan ${loan.id}: due_date mismatch detected (${currentDueDate || 'null'} -> ${expectedDueDate})`);
 
     try {
       await pool.query(

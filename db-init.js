@@ -436,7 +436,7 @@ async function retroactiveExtendLoans(pool) {
         const shouldMarkExtended = qualifies || loan.extended_this_cycle === true;
 
         const currentDueDate = loan.due_date ? formatDate(loan.due_date) : null;
-        const shouldUpdate = currentDueDate === null || currentDueDate < expectedDueDate;
+        const shouldUpdate = currentDueDate === null || currentDueDate !== expectedDueDate;
 
         console.log(`      payment_history: ${countFromHistory} records, $${totalFromHistory.toFixed(2)}`);
         console.log(`      payments table: ${countFromPayments} records, $${totalFromPayments.toFixed(2)}`);
@@ -445,9 +445,11 @@ async function retroactiveExtendLoans(pool) {
         console.log(`      Reconstructed due date: ${expectedDueDate}`);
 
         if (!shouldUpdate) {
-          console.log(`      ✅ Due date already aligned: ${currentDueDate} >= ${expectedDueDate}`);
+          console.log(`      ✅ Due date already aligned: ${currentDueDate} == ${expectedDueDate}`);
           continue;
         }
+
+        console.log(`      🔄 Due date mismatch detected: ${currentDueDate || 'null'} -> ${expectedDueDate}`);
 
         try {
           const updateResult = await pool.query(
