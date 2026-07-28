@@ -251,6 +251,51 @@ module.exports = {
  * @param {Date} paymentDate - Date of the payment (optional, defaults to today)
  * @returns {Object} - Object with new loan values and extension flags
  */
+function parseDateOnly(value) {
+  if (!value) return null;
+
+  if (typeof value === 'string') {
+    const datePart = value.split('T')[0];
+    const parts = datePart.split('-');
+    if (parts.length === 3) {
+      return {
+        year: parseInt(parts[0], 10),
+        month: parseInt(parts[1], 10),
+        day: parseInt(parts[2], 10)
+      };
+    }
+    const parsed = new Date(value);
+    return {
+      year: parsed.getFullYear(),
+      month: parsed.getMonth() + 1,
+      day: parsed.getDate()
+    };
+  }
+
+  if (value instanceof Date) {
+    return {
+      year: value.getFullYear(),
+      month: value.getMonth() + 1,
+      day: value.getDate()
+    };
+  }
+
+  return null;
+}
+
+function formatDateOnly(value) {
+  const date = parseDateOnly(value);
+  if (!date) return null;
+  return `${date.year}-${String(date.month).padStart(2, '0')}-${String(date.day).padStart(2, '0')}`;
+}
+
+function isSameOrBefore(dateA, dateB) {
+  if (!dateA || !dateB) return false;
+  if (dateA.year !== dateB.year) return dateA.year < dateB.year;
+  if (dateA.month !== dateB.month) return dateA.month < dateB.month;
+  return dateA.day <= dateB.day;
+}
+
 function processPaymentWithAutoExtend(loan, paymentAmount, paymentDate) {
   paymentDate = paymentDate || new Date();
   
@@ -258,28 +303,25 @@ function processPaymentWithAutoExtend(loan, paymentAmount, paymentDate) {
   const principal = parseFloat(loan.loan_amount || 0);
   const interestRate = parseFloat(loan.interest_rate || 0);
   const currentInterestAmount = parseFloat(loan.interest_amount || 0);
-  const dueDate = new Date(loan.due_date);
+  const dueDate = loan.due_date;
   const interestPaidThisCycle = parseFloat(loan.interest_paid_this_cycle || 0);
   const extendedThisCycle = loan.extended_this_cycle === true || loan.extended_this_cycle === 'true';
   const currentRemaining = parseFloat(loan.remaining_balance || 0);
   const status = loan.status?.toLowerCase() || 'active';
   
-  // Normalize payment date to date only (for comparison)
-  const paymentDateOnly = new Date(paymentDate);
-  paymentDateOnly.setHours(0, 0, 0, 0);
-  
-  const dueDateOnly = new Date(dueDate);
-  dueDateOnly.setHours(0, 0, 0, 0);
+  const paymentDateOnly = parseDateOnly(paymentDate);
+  const dueDateOnly = parseDateOnly(dueDate);
+  const formattedDueDate = formatDateOnly(dueDate);
   
   console.log(`\n💳 AUTO-EXTEND PAYMENT PROCESSING - Loan ${loanId}`);
-  console.log(`   Payment Date: ${paymentDateOnly.toISOString().split('T')[0]}`);
-  console.log(`   Due Date: ${dueDate.toISOString().split('T')[0]}`);
+  console.log(`   Payment Date: ${paymentDateOnly ? `${paymentDateOnly.year}-${String(paymentDateOnly.month).padStart(2, '0')}-${String(paymentDateOnly.day).padStart(2, '0')}` : 'invalid'}`);
+  console.log(`   Due Date: ${formattedDueDate}`);
   console.log(`   Payment Amount: $${paymentAmount.toFixed(2)}`);
   console.log(`   Current Interest This Cycle: $${currentInterestAmount.toFixed(2)}`);
   console.log(`   Previously Paid This Cycle: $${interestPaidThisCycle.toFixed(2)}`);
   console.log(`   Already Extended This Cycle: ${extendedThisCycle}`);
   
-  const isBeforeOrOnDueDate = paymentDateOnly <= dueDateOnly;
+  const isBeforeOrOnDueDate = isSameOrBefore(paymentDateOnly, dueDateOnly);
   console.log(`   Payment is before/on due date: ${isBeforeOrOnDueDate}`);
   
   const totalInterestPaidAfter = interestPaidThisCycle + paymentAmount;
@@ -288,19 +330,19 @@ function processPaymentWithAutoExtend(loan, paymentAmount, paymentDate) {
   const reachesInterest = totalInterestPaidAfter >= currentInterestAmount;
   console.log(`   Reaches interest amount ($${currentInterestAmount.toFixed(2)}): ${reachesInterest}`);
   
-  if (!isBeforeOrOnDueDate && !reachesInterest) {
-    console.log(`   ⏭️  PAYMENT AFTER DUE DATE - Interest not covered, no extension`);
+  if (!isBeforeOrOnDueDate) {
+    console.log(`   ⏭️  PAYMENT AFTER DUE DATE - No auto-extension applies`);
     const newRemaining = Math.max(currentRemaining - paymentAmount, 0);
     return {
       autoExtendTriggered: false,
       newPrincipal: principal,
       newInterestAmount: currentInterestAmount,
-      newDueDate: dueDate.toISOString().split('T')[0],
+      newDueDate: formattedDueDate,
       newInterestPaidThisCycle: totalInterestPaidAfter,
-      newExtendedThisCycle: false,
+      newExtendedThisCycle: extendedThisCycle,
       finalRemainingBalance: newRemaining,
       newStatus: newRemaining === 0 ? 'redeemed' : status,
-      message: 'Payment applied (after due date, interest not covered, no extension)'
+      message: 'Payment applied after due date, no extension'
     };
   }
   
