@@ -209,6 +209,28 @@ console.log('TEST 10: Month-end date handling (extending from Jan 31)');
   console.log('');
 }
 
+// ===== TEST 11: Already-extended interest-only payments must not reduce balance =====
+console.log('TEST 11: Already-extended interest-only payments must not reduce balance');
+{
+  const loan = createTestLoan({
+    loan_amount: 15000,
+    interest_rate: 2.5,
+    interest_amount: 375,
+    remaining_balance: 15375,
+    due_date: '2026-07-09',
+    status: 'active',
+    interest_paid_this_cycle: 375,
+    extended_this_cycle: true
+  });
+
+  const result = processPaymentWithAutoExtend(loan, 375, new Date('2026-07-31'));
+
+  assert(result.autoExtendTriggered === false, 'No double extension triggered');
+  assert(result.finalRemainingBalance === 15375, 'Interest-only payment leaves outstanding balance unchanged when already extended');
+  assert(result.totalPayableAmount === 15375, 'Total payable remains the contract total, not the reduced remaining balance');
+  console.log('');
+}
+
 // ===== SUMMARY =====
 console.log('\n========================================');
 console.log(`📊 Test Results:`);

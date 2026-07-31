@@ -2093,6 +2093,8 @@ app.post('/make-payment', authenticateToken, requireActiveShift, async (req, res
     console.log(`   New due date: ${paymentResult.newDueDate}`);
     console.log(`   New remaining balance: $${paymentResult.finalRemainingBalance.toFixed(2)}`);
 
+    const contractTotalPayable = paymentResult.totalPayableAmount ?? (paymentResult.newPrincipal + paymentResult.newInterestAmount);
+
     // Update the loan with new calculated values using transaction
     const updatedLoanResult = await client.query(
       `UPDATE loans SET 
@@ -2113,7 +2115,7 @@ app.post('/make-payment', authenticateToken, requireActiveShift, async (req, res
         paymentResult.newInterestAmount,
         paymentResult.newDueDate,
         paymentResult.newStatus,
-        paymentResult.finalRemainingBalance,
+        contractTotalPayable,
         paymentResult.newInterestPaidThisCycle,
         paymentResult.newExtendedThisCycle,
         loanId
@@ -4097,6 +4099,8 @@ app.post('/customers/:customerId/loans/:loanId/payment', authenticateToken, requ
     console.log(`   New due date: ${paymentResult.newDueDate}`);
     console.log(`   New remaining balance: $${paymentResult.finalRemainingBalance.toFixed(2)}`);
 
+    const contractTotalPayable = paymentResult.totalPayableAmount ?? (paymentResult.newPrincipal + paymentResult.newInterestAmount);
+
     // Update the loan with new calculated values using transaction
     const updatedLoanResult = await client.query(
       `UPDATE loans SET 
@@ -4117,7 +4121,7 @@ app.post('/customers/:customerId/loans/:loanId/payment', authenticateToken, requ
         paymentResult.newInterestAmount,
         paymentResult.newDueDate,
         paymentResult.newStatus,
-        paymentResult.finalRemainingBalance,
+        contractTotalPayable,
         paymentResult.newInterestPaidThisCycle,
         paymentResult.newExtendedThisCycle,
         loanIdNum

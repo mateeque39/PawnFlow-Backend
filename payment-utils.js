@@ -333,7 +333,8 @@ function processPaymentWithAutoExtend(loan, paymentAmount, paymentDate) {
   
   if (extendedThisCycle) {
     console.log(`   ⏭️  ALREADY EXTENDED THIS CYCLE - No double extension`);
-    const newRemaining = Math.max(currentRemaining - paymentAmount, 0);
+    const totalPayableAmount = principal + currentInterestAmount;
+    const newRemaining = currentRemaining;
     return {
       autoExtendTriggered: false,
       newPrincipal: principal,
@@ -342,6 +343,7 @@ function processPaymentWithAutoExtend(loan, paymentAmount, paymentDate) {
       newInterestPaidThisCycle: totalInterestPaidAfter,
       newExtendedThisCycle: true,
       finalRemainingBalance: newRemaining,
+      totalPayableAmount,
       newStatus: newRemaining === 0 ? 'redeemed' : status,
       message: 'Payment applied (already extended this cycle)'
     };
@@ -357,6 +359,7 @@ function processPaymentWithAutoExtend(loan, paymentAmount, paymentDate) {
       newInterestPaidThisCycle: 0,
       newExtendedThisCycle: extendedThisCycle,
       finalRemainingBalance: 0,
+      totalPayableAmount: 0,
       newStatus: 'redeemed',
       message: 'Payment completed full payoff and redeemed the loan'
     };
@@ -365,6 +368,7 @@ function processPaymentWithAutoExtend(loan, paymentAmount, paymentDate) {
   if (!reachesInterest) {
     console.log(`   ❌ Interest payment insufficient - no extension`);
     const newRemaining = Math.max(currentRemaining - paymentAmount, 0);
+    const totalPayableAmount = principal + currentInterestAmount;
     return {
       autoExtendTriggered: false,
       newPrincipal: principal,
@@ -373,6 +377,7 @@ function processPaymentWithAutoExtend(loan, paymentAmount, paymentDate) {
       newInterestPaidThisCycle: totalInterestPaidAfter,
       newExtendedThisCycle: false,
       finalRemainingBalance: newRemaining,
+      totalPayableAmount,
       newStatus: newRemaining === 0 ? 'redeemed' : status,
       message: `Payment applied. Interest accumulated: $${totalInterestPaidAfter.toFixed(2)} of $${currentInterestAmount.toFixed(2)}`
     };
@@ -394,11 +399,13 @@ function processPaymentWithAutoExtend(loan, paymentAmount, paymentDate) {
     ? currentInterestAmount
     : Math.round((newPrincipal * interestRate / 100) * 100) / 100;
   const finalRemainingBalance = newPrincipal + nextCycleInterest;
+  const totalPayableAmount = newPrincipal + nextCycleInterest;
   
   console.log(`   Principal: $${principal.toFixed(2)} → $${newPrincipal.toFixed(2)}`);
   console.log(`   Payment applied before next-cycle interest: $${paymentAmount.toFixed(2)}`);
   console.log(`   Next cycle interest: $${nextCycleInterest.toFixed(2)}`);
   console.log(`   Final remaining balance: $${finalRemainingBalance.toFixed(2)}`);
+  console.log(`   Contract total payable: $${totalPayableAmount.toFixed(2)}`);
   
   return {
     autoExtendTriggered: true,
@@ -408,6 +415,7 @@ function processPaymentWithAutoExtend(loan, paymentAmount, paymentDate) {
     newInterestPaidThisCycle,
     newExtendedThisCycle,
     finalRemainingBalance,
+    totalPayableAmount,
     newStatus,
     message: `✅ Auto-extended! Interest covered and due date moved to ${newDueDate}`
   };
