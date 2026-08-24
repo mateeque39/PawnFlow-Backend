@@ -348,6 +348,22 @@ function processPaymentWithAutoExtend(loan, paymentAmount, paymentDate) {
       message: 'Payment applied (already extended this cycle)'
     };
   }
+
+  if (!isBeforeOrOnDueDate) {
+    console.log(`   ⏭️  PAYMENT AFTER DUE DATE - No auto-extension`);
+    const newRemaining = Math.max(currentRemaining - paymentAmount, 0);
+    return {
+      autoExtendTriggered: false,
+      newPrincipal: principal,
+      newInterestAmount: currentInterestAmount,
+      newDueDate: dueDate.toISOString().split('T')[0],
+      newInterestPaidThisCycle: totalInterestPaidAfter,
+      newExtendedThisCycle: false,
+      finalRemainingBalance: newRemaining,
+      newStatus: newRemaining === 0 ? 'redeemed' : status,
+      message: 'Payment applied after the due date; no auto-extension'
+    };
+  }
   
   if (paymentAmount >= currentRemaining) {
     console.log(`   🎯 Full payoff detected - loan will be redeemed`);

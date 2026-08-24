@@ -11,11 +11,23 @@ const jsPDF = require('jspdf').jsPDF;
 function formatDate(dateValue) {
   if (!dateValue) return 'N/A';
   if (dateValue instanceof Date) {
-    return dateValue.toLocaleDateString('en-US', { year: 'numeric', month: '2-digit', day: '2-digit' });
+    const dateObj = new Date(
+      dateValue.getUTCFullYear(),
+      dateValue.getUTCMonth(),
+      dateValue.getUTCDate()
+    );
+    return dateObj.toLocaleDateString('en-US', { year: 'numeric', month: '2-digit', day: '2-digit' });
   }
   if (typeof dateValue === 'string') {
     try {
-      const dateObj = new Date(dateValue);
+      const dateOnly = dateValue.match(/^\d{4}-\d{2}-\d{2}$/);
+      const dateObj = dateOnly
+        ? new Date(
+            Number(dateValue.slice(0, 4)),
+            Number(dateValue.slice(5, 7)) - 1,
+            Number(dateValue.slice(8, 10))
+          )
+        : new Date(dateValue);
       if (!isNaN(dateObj.getTime())) {
         return dateObj.toLocaleDateString('en-US', { year: 'numeric', month: '2-digit', day: '2-digit' });
       }
@@ -112,6 +124,10 @@ async function generateLoanPDF(loan) {
     let dueDate = formatDate(loan.due_date);
     
     const totalPayable = parseFloat(loan.total_payable_amount || loanAmount).toFixed(2);
+    const paymentAmount = loan.payment_amount == null ? null : parseFloat(loan.payment_amount).toFixed(2);
+    const paymentDate = loan.payment_date ? formatDate(loan.payment_date) : null;
+    const paymentMethod = loan.payment_method || null;
+    const remainingBalance = parseFloat(loan.remaining_balance || 0).toFixed(2);
 
     // Two-column layout for key info
     const col1 = margin;
@@ -179,6 +195,30 @@ async function generateLoanPDF(loan) {
     doc.setFont(undefined, 'normal');
     doc.text(`$${recurringFee}`, col1 + labelWidth, y);
     y += 8;
+
+    if (paymentAmount !== null) {
+      doc.setFont(undefined, 'bold');
+      doc.text('Payment Received:', col1, y);
+      doc.setFont(undefined, 'normal');
+      doc.text(`$${paymentAmount}`, col1 + labelWidth, y);
+      doc.setFont(undefined, 'bold');
+      doc.text('Payment Date:', col2, y);
+      doc.setFont(undefined, 'normal');
+      doc.text(paymentDate || 'N/A', col2 + labelWidth, y);
+      y += 5;
+
+      doc.setFont(undefined, 'bold');
+      doc.text('Payment Method:', col1, y);
+      doc.setFont(undefined, 'normal');
+      doc.text(String(paymentMethod || 'N/A').toUpperCase(), col1 + labelWidth, y);
+      y += 5;
+
+      doc.setFont(undefined, 'bold');
+      doc.text('Remaining Balance:', col1, y);
+      doc.setFont(undefined, 'normal');
+      doc.text(`$${remainingBalance}`, col1 + labelWidth, y);
+      y += 8;
+    }
 
     // ===== TOTAL SECTION =====
     doc.setFontSize(11).setFont(undefined, 'bold');
